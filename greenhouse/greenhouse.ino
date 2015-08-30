@@ -1,19 +1,18 @@
-#include <EtherCard.h>
-
+#include <SoftwareSerial.h>
 #include <LiquidCrystal595.h>
 #include <Dht11.h>
 #include <Servo.h>
 
 
-int maxC=0, minC=100;
+int8_t maxC=0, minC=100;
 const byte buttonPin = 5;
-int tempSensorValue = 0;
-int tempLimitPotValue = 0;
-int humSensorValue = 0;
-int humLimitPotValue = 0;
-int buttonState = LOW;
-int alertLevel  = 30;
-int humLevel = 80;
+int8_t tempSensorValue = 0;
+uint8_t tempLimitPotValue = 0;
+uint8_t humSensorValue = 0;
+uint8_t humLimitPotValue = 0;
+uint8_t buttonState = LOW;
+uint8_t alertLevel  = 30;
+uint8_t humLevel = 80;
 boolean hatchOpen = false;
 
 //state handling
@@ -26,32 +25,123 @@ byte state = STATE_INITIAL;
 const byte tempSensorPin = 0;
 const byte tempPotPin    = 0;
 const byte humPotPin     = 1;
+
 // The data I/O pin connected to the DHT11 sensor
 const byte DHT_DATA_PIN = 6;
-// The baud rate of the serial interface
-const int SERIAL_BAUD = 9600;
-// The delay between sensor polls.
-const byte POLL_DELAY = 2000;
 //digital pin assignments
 const byte servo1Pin     = 10;
+const byte wifiResetPin  = 13;
+
+// The baud rate of the serial interface
+const uint16_t SERIAL_BAUD  = 9600;
+const uint16_t ESP8266_BAUD = 9600;
+
 
 // Initialize the library with the numbers of the interface pins
-//LiquidCrystal lcd(12, 11, 5, 4, 3, 2); // Create an lcd object and assign the pins
-//LiquidCrystal lcd(9,8,7,6,5,4); // Create an lcd object and assign the pins, pro mini
 LiquidCrystal595 lcd(2,3,4);
 Servo servo1; // Create a servo object
 Dht11 sensor(DHT_DATA_PIN); //Create 
 
+//wifi esp8266
+SoftwareSerial espSerial(12, 11); // TX, RX
 
-// ethernet mac address - must be unique on your network
-static byte mymac[] = { 0x74,0x69,0x69,0x2D,0x30,0x31 };
+#define BUFFER_SIZE 50
+char buffer[BUFFER_SIZE];
 
-byte Ethernet::buffer[500]; // tcp/ip send and receive buffer
-BufferFiller bfill;
+uint16_t staticContLen = 0;
+#define HOME_PAGE_STATIC_ARR_SZ  9
+const uint8_t CONTENT_LEN_PLACE = 2; 
+String homePageArray[HOME_PAGE_STATIC_ARR_SZ]={
+  "HTTP/1.1 200 OK\r\n",
+  "Connection: close\r\n",
+//  "Refresh: 120\r\n",
+//  "Content-Length:",
+  "Content-Type: text/html; charset=UTF-8\r\n\r\n",
+  "<!DOCTYPE html PUBLIC>\r\n",
+//  "\"-//W3C//DTD XHTML 1.0 Strict//EN\"\r\n",
+//  "\"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd\">\r\n",
+  "<html>\r\n",
+//  "<head>\r\n",
+//  "<title>Vilikkaankujan Kasvihuone</title>\r\n",
+//  "</head>\r\n",
+  "<body>\r\n",
+  "<h1>Kasvihuone</h1>\r\n",
+  "</body>\r\n",
+  "</html>\r\n\r\n",
+};
 
 //functions
+
+String GetResponse(String AT_Command, int wait, char *waitFor=NULL) {
+  String tmpData="";
+  String dbgData="";
+  byte cntr=0;
+resend:
+  espSerial.println(AT_Command);
+  delay(10);
+  while (espSerial.available() > 0 )  {
+    char c = espSerial.read();
+    tmpData += c;
+
+    if ( tmpData.indexOf(AT_Command) > -1 )
+      tmpData = "";
+    else
+      tmpData.trim();
+  }
+  dbgData=tmpData;
+  if (tmpData.indexOf("busy") > -1 ){
+      delay(100);
+      dbgData+="...busy...\n";
+      tmpData="";
+      if (++cntr < 10) goto resend;
+ }
+ delay(wait);
+ return dbgData;
+}
+
+void sendCommand ( char * cmd,  uint16_t wait, bool cipsend=false ) {
+  Serial.println(cmd);
+  Serial.println(GetResponse(cmd, wait));
+}
+
+void setupWifi()
+{
+  //connect wifi
+  Serial.println("Restarting ESP");
+  digitalWrite (wifiResetPin, LOW);
+  delay(10000);
+  digitalWrite (wifiResetPin, HIGH);
+  delay(10000);
+  clearSerialBuffer();
+  sendCommand ("AT+CIOBAUD=9600", 1000);
+  sendCommand ("AT+RST", 8000);
+  delay(10000);
+  sendCommand ( "AT+CWMODE=1", 2000 );
+  sendCommand ( "AT+CWJAP=\"SSID\",\"passwd\"", 10000);
+  sendCommand ( "AT+CIPMUX=1", 2000 );
+  sendCommand ( "AT+CIPSERVER=1,8080\r", 8000 );
+  sendCommand ( "AT+CIPSTO=120\r", 2000 );
+  sendCommand ( "AT+CIPSTO?\r", 2000 );
+  sendCommand ( "AT+CIFSR\r", 3000);
+  sendCommand ( "AT+GMR\r", 3000);
+}
+
 void setup() {
+  uint8_t cntr;
+  for (cntr=3;cntr < HOME_PAGE_STATIC_ARR_SZ;cntr++){
+    staticContLen+=homePageArray[cntr].length();
+  }
+
   Serial.begin(SERIAL_BAUD);
+
+  servo1.attach(servo1Pin); // Attaches the servo on pin 14 to the servo1 object
+  servo1.write(180);  // Put servo1 at home position
+  delay(1000);
+  servo1.detach();
+
+  // Open serial communications and wait for port to open:
+  espSerial.begin(9600);
+  espSerial.setTimeout(15000);
   delay(3000);
   Serial.println("\nStarting up...");
   Serial.print("Dht11 Lib version ");
@@ -59,51 +149,143 @@ void setup() {
   lcd.begin(16, 2); // Set the display to 16 columns and 2 rows
   analogReference(INTERNAL);
   pinMode(buttonPin, INPUT);
-  lcd.clear();
-
-  servo1.attach(servo1Pin); // Attaches the servo on pin 14 to the servo1 object
-  servo1.write(180);  // Put servo1 at home position
-
-  if (ether.begin(sizeof Ethernet::buffer, mymac) == 0) 
-    Serial.println( "Failed to access Ethernet controller");
-
-  if (!ether.dhcpSetup())
-    Serial.println("DHCP failed");
-
-  ether.printIp("IP:  ", ether.myip);
-  ether.printIp("GW:  ", ether.gwip);  
-  ether.printIp("DNS: ", ether.dnsip);
-  state = STATE_INITIAL;
-}
-
-static word homePage() {
+  pinMode(wifiResetPin, OUTPUT);
+  digitalWrite (wifiResetPin, HIGH);
   
-  bfill = ether.tcpOffset();
-  bfill.emit_p(PSTR(
-    "HTTP/1.0 200 OK\r\n"
-    "Content-Type: text/html\r\n"
-    "Pragma: no-cache\r\n"
-    "\r\n"
-    "<meta http-equiv='refresh' content='1'/>"
-    "<title>Korhonen Greenhouse</title>"
-    "<h1>Vilikkaankujan kasvihuone</h1>"
-    "<p>L&auml;p&ouml;tila:$D&deg;C</p>"
-    "<p>Kosteus:$D&#37;</p>"
-    "<p><b>Ikkuna on $S</b></p>"),
-      tempSensorValue, humSensorValue,
-      (hatchOpen)?"Auki":"Kiinni");
-  return bfill.position();
+  lcd.clear();
+  lcd.setCursor(0,0);
+  
+  
+  lcd.print("Setting up Wifi.");
+  setupWifi();
+  
+  lcd.setCursor(0,0);
+  lcd.print("Wifi is set up.");
+  delay(1000);
+  lcd.clear();
+  
+  state = STATE_INITIAL;
 }
 
 void loop() 
 {
+  uint8_t ch_id=0;
+  uint16_t packet_len;
+  char *pb;
+
   lcd.setCursor(0,0); // Set cursor to home position
   readValues();
   handleState();
+  if(espSerial.available()) // check if the esp is sending a message 
+  {
+    espSerial.readBytesUntil('\n', buffer, BUFFER_SIZE);
+    if (strncmp(buffer, "+IPD,", 5) == 0) {
+      // request: +IPD,ch,len:data
+      sscanf(buffer + 5, "%d,%d", &ch_id, &packet_len);
+      if (packet_len > 0) {
+        // read serial until packet_len character received
+        // start from :
+        pb = buffer + 5;
+        while (*pb != ':') pb++;
+        pb++;
+        if (strncmp(pb, "GET / ", 6) == 0) {
+          Serial.println(buffer);
+          Serial.print( "get Status from ch:" );
+          Serial.println(ch_id);
+          delay(100);
+          clearSerialBuffer();
+          homepage(ch_id);
+        }
+      }
+    }
+  }
+  clearBuffer();
+  delay(500); 
+}
 
-  if (ether.packetLoop(ether.packetReceive()))  // check if valid tcp data is received
-    ether.httpServerReply(homePage()); // send web page data
-  delay(250); 
+void sendToClient(String *data, uint8_t ch_id)
+{
+  char command[20] = {0};
+  snprintf(command,19,"AT+CIPSEND=%d,%d", ch_id, data->length());
+  espSerial.println(command);
+  if(espSerial.find(">")){
+    espSerial.print(*data);
+    delay(200);
+    if (espSerial.find("OK")){
+        while(espSerial.available()) // check if the esp is sending a message 
+        {
+          char temp=espSerial.read();
+          Serial.print(temp);
+        }
+    }
+    else{
+      Serial.println("sending data failed...");
+    }
+  }else{
+    Serial.println("D'OH! Connection failure!");
+    setupWifi();
+  }
+  //esp seems wery slow at times, so just in case...
+  delay(500);
+}
+
+void homepage(uint8_t ch_id) {
+  //create dynamic content first, so that we get the length.
+  String tempstr = "<p>L&auml;mp&ouml;tila:";
+  tempstr += tempSensorValue;
+  tempstr += "&deg;C</p>\r\n";
+  String humstr = "<p>Kosteus:";
+  humstr += humSensorValue;
+  humstr += "&#37;</p>\r\n";
+  String windowstr = "<p><b>Ikkuna on ";
+  windowstr += ((hatchOpen)?"Auki</b></p>\r\n":"Kiinni</b></p>\r\n");
+  //count dynamic lengts together and Set Content Len in header
+  String hdrContLen = "Content-Length: ";
+  hdrContLen += String((tempstr.length() +
+                        humstr.length() +
+                        windowstr.length()+
+                        staticContLen), DEC);
+  hdrContLen += "\r\n";
+  
+  Serial.println("Create HomePage");
+  Serial.println(hdrContLen);
+  sendToClient(&homePageArray[0], ch_id);
+  sendToClient(&homePageArray[1], ch_id);
+  sendToClient(&hdrContLen, ch_id);
+  sendToClient(&homePageArray[2], ch_id);
+  sendToClient(&homePageArray[3], ch_id);
+  sendToClient(&homePageArray[4], ch_id);
+  sendToClient(&homePageArray[5], ch_id);
+  sendToClient(&homePageArray[6], ch_id);
+  /*
+  sendToClient(&homePageArray[7], ch_id);
+  sendToClient(&homePageArray[8], ch_id);
+  sendToClient(&homePageArray[9], ch_id);
+  sendToClient(&homePageArray[10], ch_id);
+  sendToClient(&homePageArray[11], ch_id);
+  sendToClient(&homePageArray[12], ch_id);
+  sendToClient(&homePageArray[13], ch_id);*/
+  //dynamic part
+  sendToClient(&tempstr, ch_id);
+  sendToClient(&humstr, ch_id);
+  sendToClient(&windowstr, ch_id);
+  //end of html page
+  sendToClient(&homePageArray[7], ch_id);
+  sendToClient(&homePageArray[8], ch_id);
+  
+  Serial.println("HomePage End.");
+}
+
+void clearSerialBuffer(void) {
+  while ( espSerial.available() > 0 ) {
+     espSerial.read();
+  }
+}
+
+void clearBuffer(void) {
+  for (int i = 0; i < BUFFER_SIZE; i++ ) {
+    buffer[i] = 0;
+  }
 }
 
 void handleState()
@@ -152,7 +334,7 @@ void readValues()
       break;
     case Dht11::ERROR_TIMEOUT:
       Serial.println("Timeout error");
-      break;
+     break;
     default:
       Serial.println("Unknown error");
       break;
@@ -177,25 +359,32 @@ void readValues()
   buttonState = digitalRead(buttonPin); // Check for button press  
 }
 
+void turnServo(uint16_t degree)
+{
+  servo1.attach(servo1Pin); // Attaches the servo on pin 14 to the servo1 object
+  servo1.write(degree);  // Put servo1 at home position
+  delay(3000);
+  servo1.detach();  //detach not to disturb SoftwareSerial
+}
+
 void stateWorking()
 {
-  //deg_cels = (tempSensorValue * 0.09765625);
   celsius(tempSensorValue);
 
-  if (!hatchOpen && tempSensorValue >= alertLevel){
+  if (!hatchOpen && (tempSensorValue >= alertLevel ||( humSensorValue >= humLevel && tempSensorValue >= 20))){
     Serial.print("Alert! over ");
     Serial.print(alertLevel);
     Serial.print("degrees, open hatch\n");
-    servo1.write(90);
+    turnServo(90);
     hatchOpen=true;
   }
-  if (hatchOpen && tempSensorValue <= alertLevel-2){
+  if (hatchOpen && tempSensorValue <= alertLevel-2 && (humSensorValue <= humLevel) || tempSensorValue <= 20){
     Serial.print("Alert! less than ");
     Serial.print(alertLevel);
     Serial.print("(");
     Serial.print(tempSensorValue);
     Serial.print(") degrees, close hatch\n");
-    servo1.write(180);
+    turnServo(180);
     hatchOpen=false;
   }  
 }
@@ -246,7 +435,4 @@ void stateSetup()
 {   
   displaySetup();
 }
-
-
-
 
