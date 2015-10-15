@@ -13,6 +13,7 @@ uint8_t humLimitPotValue = 0;
 uint8_t buttonState = LOW;
 uint8_t alertLevel  = 30;
 uint8_t humLevel = 80;
+uint8_t wifiCheckCntr = 0;
 boolean hatchOpen = false;
 
 //state handling
@@ -22,7 +23,6 @@ const byte STATE_SETUP   = 2;
 byte state = STATE_INITIAL;
 
 //analog pin assignments
-const byte tempSensorPin = 0;
 const byte tempPotPin    = 0;
 const byte humPotPin     = 1;
 
@@ -54,7 +54,6 @@ const uint8_t CONTENT_LEN_PLACE = 2;
 String homePageArray[HOME_PAGE_STATIC_ARR_SZ]={
   "HTTP/1.1 200 OK\r\n",
   "Connection: close\r\n",
-//  "Refresh: 120\r\n",
 //  "Content-Length:",
   "Content-Type: text/html; charset=UTF-8\r\n\r\n",
   "<!DOCTYPE html PUBLIC>\r\n",
@@ -62,10 +61,10 @@ String homePageArray[HOME_PAGE_STATIC_ARR_SZ]={
 //  "\"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd\">\r\n",
   "<html>\r\n",
 //  "<head>\r\n",
-//  "<title>Vilikkaankujan Kasvihuone</title>\r\n",
+//  "<title>The Greenhouse</title>\r\n",
 //  "</head>\r\n",
   "<body>\r\n",
-  "<h1>Kasvihuone</h1>\r\n",
+  "<h1>Greenhouse</h1>\r\n",
   "</body>\r\n",
   "</html>\r\n\r\n",
 };
@@ -136,7 +135,7 @@ void setup() {
 
   servo1.attach(servo1Pin); // Attaches the servo on pin 14 to the servo1 object
   servo1.write(180);  // Put servo1 at home position
-  delay(1000);
+  delay(2000);
   servo1.detach();
 
   // Open serial communications and wait for port to open:
@@ -146,22 +145,21 @@ void setup() {
   Serial.println("\nStarting up...");
   Serial.print("Dht11 Lib version ");
   Serial.println(Dht11::VERSION);
-  lcd.begin(16, 2); // Set the display to 16 columns and 2 rows
   analogReference(INTERNAL);
   pinMode(buttonPin, INPUT);
   pinMode(wifiResetPin, OUTPUT);
   digitalWrite (wifiResetPin, HIGH);
-  
+
+  lcd.begin(16, 2); // Set the display to 16 columns and 2 rows
   lcd.clear();
   lcd.setCursor(0,0);
-  
   
   lcd.print("Setting up Wifi.");
   setupWifi();
   
   lcd.setCursor(0,0);
   lcd.print("Wifi is set up.");
-  delay(1000);
+  delay(5000);
   lcd.clear();
   
   state = STATE_INITIAL;
@@ -189,9 +187,9 @@ void loop()
         while (*pb != ':') pb++;
         pb++;
         if (strncmp(pb, "GET / ", 6) == 0) {
-          Serial.println(buffer);
-          Serial.print( "get Status from ch:" );
-          Serial.println(ch_id);
+          //Serial.println(buffer);
+          //Serial.print( "get Status from ch:" );
+          //Serial.println(ch_id);
           delay(100);
           clearSerialBuffer();
           homepage(ch_id);
@@ -200,6 +198,15 @@ void loop()
     }
   }
   clearBuffer();
+  if (!(++wifiCheckCntr)){
+    espSerial.println("AT+GMR\r");
+    if(espSerial.find("OK")){
+      Serial.println("Wifi OK");
+    }else{
+      Serial.println("Wifi NOK, restart WIfi");
+      setupWifi();
+    }
+  }
   delay(500); 
 }
 
@@ -219,26 +226,43 @@ void sendToClient(String *data, uint8_t ch_id)
         }
     }
     else{
-      Serial.println("sending data failed...");
+      Serial.println("send data failed!");
     }
   }else{
-    Serial.println("D'OH! Connection failure!");
+    Serial.println("D'OH! Conn. fail!");
     setupWifi();
   }
   //esp seems wery slow at times, so just in case...
   delay(500);
 }
 
+char *get_temp_warn()
+{
+  if (tempSensorValue <=5) return "WARN!";
+  if (tempSensorValue < 15 && tempSensorValue >5) return "cold";
+  if (tempSensorValue < 20 && tempSensorValue >14) return "chilly";
+  if (tempSensorValue < 31 && tempSensorValue >19) return "OK";
+  if (tempSensorValue > 30) return "HOT!";
+  return "";
+}
+
 void homepage(uint8_t ch_id) {
   //create dynamic content first, so that we get the length.
-  String tempstr = "<p>L&auml;mp&ouml;tila:";
+  String tempstr = "<p>Temperature:";
   tempstr += tempSensorValue;
-  tempstr += "&deg;C</p>\r\n";
-  String humstr = "<p>Kosteus:";
+  tempstr += "&deg;C ";
+  tempstr += get_temp_warn();
+  tempstr += "</br>min:";
+  tempstr += minC;
+  tempstr += " max:";
+  tempstr += maxC;
+  tempstr += " ";
+  tempstr += "</p>\r\n";
+  String humstr = "<p>Hum:";
   humstr += humSensorValue;
   humstr += "&#37;</p>\r\n";
-  String windowstr = "<p><b>Ikkuna on ";
-  windowstr += ((hatchOpen)?"Auki</b></p>\r\n":"Kiinni</b></p>\r\n");
+  String windowstr = "<p><b>Window is ";
+  windowstr += ((hatchOpen)?"Open</b></p>\r\n":"Closed</b></p>\r\n");
   //count dynamic lengts together and Set Content Len in header
   String hdrContLen = "Content-Length: ";
   hdrContLen += String((tempstr.length() +
@@ -247,7 +271,7 @@ void homepage(uint8_t ch_id) {
                         staticContLen), DEC);
   hdrContLen += "\r\n";
   
-  Serial.println("Create HomePage");
+  Serial.println("Show page");
   Serial.println(hdrContLen);
   sendToClient(&homePageArray[0], ch_id);
   sendToClient(&homePageArray[1], ch_id);
@@ -257,23 +281,14 @@ void homepage(uint8_t ch_id) {
   sendToClient(&homePageArray[4], ch_id);
   sendToClient(&homePageArray[5], ch_id);
   sendToClient(&homePageArray[6], ch_id);
-  /*
-  sendToClient(&homePageArray[7], ch_id);
-  sendToClient(&homePageArray[8], ch_id);
-  sendToClient(&homePageArray[9], ch_id);
-  sendToClient(&homePageArray[10], ch_id);
-  sendToClient(&homePageArray[11], ch_id);
-  sendToClient(&homePageArray[12], ch_id);
-  sendToClient(&homePageArray[13], ch_id);*/
   //dynamic part
   sendToClient(&tempstr, ch_id);
   sendToClient(&humstr, ch_id);
   sendToClient(&windowstr, ch_id);
   //end of html page
   sendToClient(&homePageArray[7], ch_id);
-  sendToClient(&homePageArray[8], ch_id);
-  
-  Serial.println("HomePage End.");
+  sendToClient(&homePageArray[8], ch_id);  
+  Serial.println("Show done");
 }
 
 void clearSerialBuffer(void) {
@@ -323,11 +338,11 @@ void readValues()
     case Dht11::OK:
       humSensorValue = sensor.getHumidity();
       tempSensorValue = sensor.getTemperature();
-      Serial.print("\nTemperature (C): ");
-      Serial.print(tempSensorValue);
-      Serial.print("\nHumidity (%): ");
-      Serial.print(humSensorValue);
-      Serial.println();
+      //Serial.print("\nTemperature (C): ");
+      //Serial.print(tempSensorValue);
+      //Serial.print("\nHumidity (%): ");
+      //Serial.print(humSensorValue);
+      //Serial.println();
       break;
     case Dht11::ERROR_CHECKSUM:
       Serial.println("Checksum error");
@@ -345,16 +360,16 @@ void readValues()
   delay(10);
   tempLimitPotValue = analogRead(tempPotPin); // Read the pot value
   tempLimitPotValue = map(tempLimitPotValue, 0, 1023, 20, 40); // Map the values from 20 to 40 degrees
-  Serial.print("tp:");
-  Serial.println(tempLimitPotValue);
+  //Serial.print("tp:");
+  //Serial.println(tempLimitPotValue);
 
   delay(10);
   humLimitPotValue = analogRead(humPotPin); // Read the pot value
   delay(10);
   humLimitPotValue = analogRead(humPotPin); // Read the pot value
   humLimitPotValue = map(humLimitPotValue, 0, 1023, 20, 100); // Map the values from 20 to 100%
-  Serial.print("hp:");
-  Serial.println(humLimitPotValue);
+  //Serial.print("hp:");
+  //Serial.println(humLimitPotValue);
 
   buttonState = digitalRead(buttonPin); // Check for button press  
 }
@@ -369,29 +384,30 @@ void turnServo(uint16_t degree)
 
 void stateWorking()
 {
-  celsius(tempSensorValue);
+  
+  writeTempAndHumToLcd();
 
   if (!hatchOpen && (tempSensorValue >= alertLevel ||( humSensorValue >= humLevel && tempSensorValue >= 20))){
-    Serial.print("Alert! over ");
-    Serial.print(alertLevel);
-    Serial.print("degrees, open hatch\n");
+    //Serial.print("Alert! over ");
+    //Serial.print(alertLevel);
+    //Serial.print("degrees, open hatch\n");
     turnServo(90);
     hatchOpen=true;
   }
-  if (hatchOpen && tempSensorValue <= alertLevel-2 && (humSensorValue <= humLevel) || tempSensorValue <= 20){
-    Serial.print("Alert! less than ");
-    Serial.print(alertLevel);
-    Serial.print("(");
-    Serial.print(tempSensorValue);
-    Serial.print(") degrees, close hatch\n");
+  if (hatchOpen && ((tempSensorValue <= alertLevel-2 && humSensorValue <= humLevel) || tempSensorValue <= 20)){
+    //Serial.print("Alert! less than ");
+    //Serial.print(alertLevel);
+    //Serial.print("(");
+    //Serial.print(tempSensorValue);
+    //Serial.print(") degrees, close hatch\n");
     turnServo(180);
     hatchOpen=false;
   }  
 }
 
-void celsius(float deg_cels) {
+void writeTempAndHumToLcd() {
   lcd.setCursor(0,0);
-  int temp = (int)deg_cels; // Convert to C
+  int temp = (int)tempSensorValue;
   lcd.print(temp);
   lcd.write(B11011111); // Degree symbol
   lcd.print("C ");
@@ -416,6 +432,7 @@ void celsius(float deg_cels) {
 }
 
 void displaySetup() {
+  lcd.clear();
   lcd.setCursor(0,0);
   lcd.print("T:");
   lcd.print(tempLimitPotValue);
