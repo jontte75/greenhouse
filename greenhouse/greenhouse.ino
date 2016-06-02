@@ -1,299 +1,249 @@
+/**
+ * Greenhouse-project
+ * - monitor temperature and humidity. If temperature rises too high (or humidity), then open the window
+ * - monitor also soil humidity
+ * - send data to thingspeak every 10 minutes
+ * - note the "state" is just state of display
+ */
 #include <SoftwareSerial.h>
 #include <LiquidCrystal595.h>
-#include <Dht11.h>
 #include <Servo.h>
+#include <Wire.h>
+#include <AM2320.h>
+AM2320 th;
 
+/**
+   only print stuff to serial if DEBUG-build,
+   disabling Serial frees alot of memory!
+*/
 
-int8_t maxC=0, minC=100;
-const byte buttonPin = 5;
-int8_t tempSensorValue = 0;
+#define DEBUG 0
+
+#if (DEBUG > 0)
+#define SERIAL_BEGIN(_sbaud)\
+  Serial.begin(_sbaud);
+#else
+#define SERIAL_BEGIN(_sbaud)
+#endif
+
+#if (DEBUG > 0)
+#define LOG_DEBUGLN(_log)\
+  Serial.println(_log);
+#define LOG_DEBUG(_log)\
+  Serial.print(_log);
+#else
+#define LOG_DEBUGLN(_log)
+#define LOG_DEBUG(_log)
+#endif
+
+#if (DEBUG > 1)
+#define LOG_DEBUGLN2(_log)\
+  Serial.println(_log);
+#define LOG_DEBUG2(_log)\
+  Serial.print(_log);
+#else
+#define LOG_DEBUGLN2(_log)
+#define LOG_DEBUG2(_log)
+#endif
+
+//state handling
+#define STATE_INITIAL   0
+#define STATE_WORKING   1
+#define STATE_SETUP     2
+byte state = STATE_INITIAL;
+
+//analog pin assignments
+#define TEMP_POT_PIN     A0
+#define HUM_POT_PIN      A1
+#define MOIST_SENS1_PIN  A2
+
+//digital pin assignments
+#define LCDPIN1       2
+#define LCDPIN2       3
+#define LCDPIN3       4
+#define BTNPIN        5
+#define SERVOPIN      10
+#define SSERIALTX     11  //to RX on ESP-05
+#define SSERIALRX     12  //to TX on ESP-05
+#define ESPRESETPIN   13
+
+// The baud rate of the serial interface
+#define SERIAL_BAUD  9600
+#define ESP8266_BAUD 9600
+
+//global variables
+int8_t  maxC = 125, minC = -125;
+float   tempSensorValue = 0;
 uint8_t tempLimitPotValue = 0;
-uint8_t humSensorValue = 0;
+float   humSensorValue = 0;
 uint8_t humLimitPotValue = 0;
 uint8_t buttonState = LOW;
 uint8_t alertLevel  = 30;
 uint8_t humLevel = 80;
 uint8_t wifiCheckCntr = 0;
 boolean hatchOpen = false;
+uint8_t updateValuesCntr = 0;
+uint8_t moisture = 100;
 
-//state handling
-const byte STATE_INITIAL = 0;
-const byte STATE_WORKING = 1;
-const byte STATE_SETUP   = 2;
-byte state = STATE_INITIAL;
-
-//analog pin assignments
-const byte tempPotPin    = 0;
-const byte humPotPin     = 1;
-
-// The data I/O pin connected to the DHT11 sensor
-const byte DHT_DATA_PIN = 6;
-//digital pin assignments
-const byte servo1Pin     = 10;
-const byte wifiResetPin  = 13;
-
-// The baud rate of the serial interface
-const uint16_t SERIAL_BAUD  = 9600;
-const uint16_t ESP8266_BAUD = 9600;
-
+unsigned long lastConnectionTime = 0;
+const unsigned long updateThingSpeakInterval = 600000; //send values to thingspeak every 10 minutes
 
 // Initialize the library with the numbers of the interface pins
-LiquidCrystal595 lcd(2,3,4);
+LiquidCrystal595 lcd(LCDPIN1, LCDPIN2, LCDPIN3);
 Servo servo1; // Create a servo object
-Dht11 sensor(DHT_DATA_PIN); //Create 
 
 //wifi esp8266
-SoftwareSerial espSerial(12, 11); // TX, RX
+SoftwareSerial espSerial(SSERIALRX, SSERIALTX); // RX, TX
 
-#define BUFFER_SIZE 50
+#define BUFFER_SIZE 100
 char buffer[BUFFER_SIZE];
 
-uint16_t staticContLen = 0;
-#define HOME_PAGE_STATIC_ARR_SZ  9
-const uint8_t CONTENT_LEN_PLACE = 2; 
-String homePageArray[HOME_PAGE_STATIC_ARR_SZ]={
-  "HTTP/1.1 200 OK\r\n",
-  "Connection: close\r\n",
-//  "Content-Length:",
-  "Content-Type: text/html; charset=UTF-8\r\n\r\n",
-  "<!DOCTYPE html PUBLIC>\r\n",
-//  "\"-//W3C//DTD XHTML 1.0 Strict//EN\"\r\n",
-//  "\"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd\">\r\n",
-  "<html>\r\n",
-//  "<head>\r\n",
-//  "<title>The Greenhouse</title>\r\n",
-//  "</head>\r\n",
-  "<body>\r\n",
-  "<h1>Greenhouse</h1>\r\n",
-  "</body>\r\n",
-  "</html>\r\n\r\n",
-};
+#define WIFI_APN "WLANAPN1"
+#define WIFI_PWD "THISISYOURPWD1"
+#define THINGSPEAK_IP "184.106.153.149"
+#define TS_GET "GET /update?key=TSWRITEKEY123456"
 
 //functions
 
-String GetResponse(String AT_Command, int wait, char *waitFor=NULL) {
-  String tmpData="";
-  String dbgData="";
-  byte cntr=0;
+void sendCommand ( const char * cmd,  uint16_t wait){
+  String tmpData = "";
+  byte cntr = 0;
+  LOG_DEBUGLN(cmd);
 resend:
-  espSerial.println(AT_Command);
+  espSerial.println(cmd);
   delay(10);
   while (espSerial.available() > 0 )  {
     char c = espSerial.read();
     tmpData += c;
 
-    if ( tmpData.indexOf(AT_Command) > -1 )
+    if ( tmpData.indexOf(cmd) > -1 )
       tmpData = "";
     else
       tmpData.trim();
   }
-  dbgData=tmpData;
-  if (tmpData.indexOf("busy") > -1 ){
-      delay(100);
-      dbgData+="...busy...\n";
-      tmpData="";
-      if (++cntr < 10) goto resend;
- }
- delay(wait);
- return dbgData;
-}
-
-void sendCommand ( char * cmd,  uint16_t wait, bool cipsend=false ) {
-  Serial.println(cmd);
-  Serial.println(GetResponse(cmd, wait));
+  if (tmpData.indexOf("busy") > -1 ) {
+    LOG_DEBUGLN("busy");
+    delay(100);
+    tmpData = "";
+    if (++cntr < 10) goto resend;
+  }
+  LOG_DEBUGLN(tmpData);
+  delay(wait);
 }
 
 void setupWifi()
 {
-  //connect wifi
-  Serial.println("Restarting ESP");
-  digitalWrite (wifiResetPin, LOW);
-  delay(10000);
-  digitalWrite (wifiResetPin, HIGH);
+  LOG_DEBUGLN("Restarting ESP");
+  digitalWrite (ESPRESETPIN, LOW);
+  delay(5000);
+  digitalWrite (ESPRESETPIN, HIGH);
   delay(10000);
   clearSerialBuffer();
   sendCommand ("AT+CIOBAUD=9600", 1000);
   sendCommand ("AT+RST", 8000);
-  delay(10000);
-  sendCommand ( "AT+CWMODE=1", 2000 );
-  sendCommand ( "AT+CWJAP=\"SSID\",\"passwd\"", 10000);
-  sendCommand ( "AT+CIPMUX=1", 2000 );
-  sendCommand ( "AT+CIPSERVER=1,8080\r", 8000 );
-  sendCommand ( "AT+CIPSTO=120\r", 2000 );
-  sendCommand ( "AT+CIPSTO?\r", 2000 );
-  sendCommand ( "AT+CIFSR\r", 3000);
-  sendCommand ( "AT+GMR\r", 3000);
+  sendCommand ("AT+CWMODE=1", 2000 );
+  sendCommand ("AT+CWJAP=\""
+                WIFI_APN
+                "\",\""
+                WIFI_PWD
+                "\"", 15000);
+  sendCommand ("AT+CIFSR\r", 3000);
+  sendCommand ("AT+GMR\r", 3000);
 }
 
 void setup() {
-  uint8_t cntr;
-  for (cntr=3;cntr < HOME_PAGE_STATIC_ARR_SZ;cntr++){
-    staticContLen+=homePageArray[cntr].length();
-  }
-
-  Serial.begin(SERIAL_BAUD);
-
-  servo1.attach(servo1Pin); // Attaches the servo on pin 14 to the servo1 object
+  SERIAL_BEGIN(SERIAL_BAUD);
+  servo1.attach(SERVOPIN); // Attaches the servo on pin 14 to the servo1 object
   servo1.write(180);  // Put servo1 at home position
   delay(2000);
   servo1.detach();
 
   // Open serial communications and wait for port to open:
-  espSerial.begin(9600);
+  espSerial.begin(ESP8266_BAUD);
   espSerial.setTimeout(15000);
   delay(3000);
-  Serial.println("\nStarting up...");
-  Serial.print("Dht11 Lib version ");
-  Serial.println(Dht11::VERSION);
-  analogReference(INTERNAL);
-  pinMode(buttonPin, INPUT);
-  pinMode(wifiResetPin, OUTPUT);
-  digitalWrite (wifiResetPin, HIGH);
+  LOG_DEBUGLN("\nStarting up...");
+  analogReference(DEFAULT);
+  pinMode(BTNPIN, INPUT);
+  pinMode(ESPRESETPIN, OUTPUT);
+  digitalWrite (ESPRESETPIN, HIGH);
 
   lcd.begin(16, 2); // Set the display to 16 columns and 2 rows
   lcd.clear();
-  lcd.setCursor(0,0);
-  
+  lcd.setCursor(0, 0);
+
   lcd.print("Setting up Wifi.");
   setupWifi();
-  
-  lcd.setCursor(0,0);
+
+  lcd.setCursor(0, 0);
   lcd.print("Wifi is set up.");
   delay(5000);
   lcd.clear();
-  
+
+  pinMode(MOIST_SENS1_PIN, INPUT);
+
   state = STATE_INITIAL;
 }
 
-void loop() 
+void loop()
 {
-  uint8_t ch_id=0;
-  uint16_t packet_len;
-  char *pb;
-
-  lcd.setCursor(0,0); // Set cursor to home position
+  lcd.setCursor(0, 0); // Set cursor to home position
   readValues();
   handleState();
-  if(espSerial.available()) // check if the esp is sending a message 
-  {
-    espSerial.readBytesUntil('\n', buffer, BUFFER_SIZE);
-    if (strncmp(buffer, "+IPD,", 5) == 0) {
-      // request: +IPD,ch,len:data
-      sscanf(buffer + 5, "%d,%d", &ch_id, &packet_len);
-      if (packet_len > 0) {
-        // read serial until packet_len character received
-        // start from :
-        pb = buffer + 5;
-        while (*pb != ':') pb++;
-        pb++;
-        if (strncmp(pb, "GET / ", 6) == 0) {
-          //Serial.println(buffer);
-          //Serial.print( "get Status from ch:" );
-          //Serial.println(ch_id);
-          delay(100);
-          clearSerialBuffer();
-          homepage(ch_id);
-        }
-      }
-    }
-  }
-  clearBuffer();
-  if (!(++wifiCheckCntr)){
+  if (!(++wifiCheckCntr)) {
     espSerial.println("AT+GMR\r");
-    if(espSerial.find("OK")){
-      Serial.println("Wifi OK");
-    }else{
-      Serial.println("Wifi NOK, restart WIfi");
+    if (espSerial.find((char*)"OK")) {
+      LOG_DEBUGLN("Wifi OK");
+    } else {
+      LOG_DEBUGLN("Wifi NOK, restart WIfi");
       setupWifi();
     }
   }
-  delay(500); 
-}
-
-void sendToClient(String *data, uint8_t ch_id)
-{
-  char command[20] = {0};
-  snprintf(command,19,"AT+CIPSEND=%d,%d", ch_id, data->length());
-  espSerial.println(command);
-  if(espSerial.find(">")){
-    espSerial.print(*data);
-    delay(200);
-    if (espSerial.find("OK")){
-        while(espSerial.available()) // check if the esp is sending a message 
-        {
-          char temp=espSerial.read();
-          Serial.print(temp);
-        }
-    }
-    else{
-      Serial.println("send data failed!");
-    }
-  }else{
-    Serial.println("D'OH! Conn. fail!");
-    setupWifi();
+  long temp = millis();
+  if ((temp - lastConnectionTime) > updateThingSpeakInterval) {
+    updateValues();
+    lastConnectionTime = millis();
   }
-  //esp seems wery slow at times, so just in case...
-  delay(500);
+
+  delay(1000);
 }
 
-char *get_temp_warn()
+void updateValues()
 {
-  if (tempSensorValue <=5) return "WARN!";
-  if (tempSensorValue < 15 && tempSensorValue >5) return "cold";
-  if (tempSensorValue < 20 && tempSensorValue >14) return "chilly";
-  if (tempSensorValue < 31 && tempSensorValue >19) return "OK";
-  if (tempSensorValue > 30) return "HOT!";
-  return "";
-}
+  char cmd[60] = {0};
+  char float_str[10] = {0};
+  char hum_str[10] = {0};
+  char moist_str[10] = {0};
 
-void homepage(uint8_t ch_id) {
-  //create dynamic content first, so that we get the length.
-  String tempstr = "<p>Temperature:";
-  tempstr += tempSensorValue;
-  tempstr += "&deg;C ";
-  tempstr += get_temp_warn();
-  tempstr += "</br>min:";
-  tempstr += minC;
-  tempstr += " max:";
-  tempstr += maxC;
-  tempstr += " ";
-  tempstr += "</p>\r\n";
-  String humstr = "<p>Hum:";
-  humstr += humSensorValue;
-  humstr += "&#37;</p>\r\n";
-  String windowstr = "<p><b>Window is ";
-  windowstr += ((hatchOpen)?"Open</b></p>\r\n":"Closed</b></p>\r\n");
-  //count dynamic lengts together and Set Content Len in header
-  String hdrContLen = "Content-Length: ";
-  hdrContLen += String((tempstr.length() +
-                        humstr.length() +
-                        windowstr.length()+
-                        staticContLen), DEC);
-  hdrContLen += "\r\n";
-  
-  Serial.println("Show page");
-  Serial.println(hdrContLen);
-  sendToClient(&homePageArray[0], ch_id);
-  sendToClient(&homePageArray[1], ch_id);
-  sendToClient(&hdrContLen, ch_id);
-  sendToClient(&homePageArray[2], ch_id);
-  sendToClient(&homePageArray[3], ch_id);
-  sendToClient(&homePageArray[4], ch_id);
-  sendToClient(&homePageArray[5], ch_id);
-  sendToClient(&homePageArray[6], ch_id);
-  //dynamic part
-  sendToClient(&tempstr, ch_id);
-  sendToClient(&humstr, ch_id);
-  sendToClient(&windowstr, ch_id);
-  //end of html page
-  sendToClient(&homePageArray[7], ch_id);
-  sendToClient(&homePageArray[8], ch_id);  
-  Serial.println("Show done");
+  snprintf(cmd, 59, "AT+CIPSTART=\"TCP\",\"%s\",80", THINGSPEAK_IP);
+  espSerial.println(cmd);
+  delay(2000);
+  if (espSerial.find((char*)"Error")) {
+    LOG_DEBUG("Error1");
+    return;
+  }
+  snprintf(buffer, BUFFER_SIZE - 1, "%s&field1=%s&field2=%s&field3=%u&field4=%s\r\n",
+           TS_GET,
+           dtostrf(tempSensorValue, 4, 2, float_str),
+           dtostrf(humSensorValue, 4, 2, hum_str),
+           (hatchOpen) ? 1 : 0,
+           dtostrf(moisture, 4, 2, moist_str));
+
+  LOG_DEBUG(buffer);
+  espSerial.print("AT+CIPSEND=");
+  espSerial.println(strlen(buffer));
+
+  if (espSerial.find((char*)">")) {
+    espSerial.print(buffer);
+  }
+  else {
+    espSerial.println("AT+CIPCLOSE");
+  }
 }
 
 void clearSerialBuffer(void) {
   while ( espSerial.available() > 0 ) {
-     espSerial.read();
+    espSerial.read();
   }
 }
 
@@ -306,9 +256,9 @@ void clearBuffer(void) {
 void handleState()
 {
   if (buttonState == HIGH) { // Change scale state if pressed
-    Serial.print("button pressed, state is");
-    Serial.println(state);
-    if (state == STATE_INITIAL || state == STATE_WORKING){
+    LOG_DEBUG("button pressed, state is");
+    LOG_DEBUGLN(state);
+    if (state == STATE_INITIAL || state == STATE_WORKING) {
       state = STATE_SETUP;
       lcd.setLED2Pin(LOW);
       lcd.setLED1Pin(LOW);
@@ -323,60 +273,96 @@ void handleState()
       humLevel = humLimitPotValue;
     }
   }
-  
-  if (state == STATE_SETUP){
-    stateSetup();  
+
+  if (state == STATE_SETUP) {
+    stateSetup();
   }
-  if (state == STATE_WORKING||state == STATE_INITIAL){
+  if (state == STATE_WORKING || state == STATE_INITIAL) {
     stateWorking();
   }
 }
 
-void readValues()
-{
-    switch (sensor.read()) {
-    case Dht11::OK:
-      humSensorValue = sensor.getHumidity();
-      tempSensorValue = sensor.getTemperature();
-      //Serial.print("\nTemperature (C): ");
-      //Serial.print(tempSensorValue);
-      //Serial.print("\nHumidity (%): ");
-      //Serial.print(humSensorValue);
-      //Serial.println();
+bool read_from_am2320() {
+  switch (th.Read()) {
+    case 2:
+      LOG_DEBUGLN("CRC failed");
+      return false;
       break;
-    case Dht11::ERROR_CHECKSUM:
-      Serial.println("Checksum error");
+    case 1:
+      LOG_DEBUGLN("Sensor offline");
+      return false;
       break;
-    case Dht11::ERROR_TIMEOUT:
-      Serial.println("Timeout error");
-     break;
     default:
-      Serial.println("Unknown error");
+
       break;
   }
+  return true;
 
-  delay(10);
-  tempLimitPotValue = analogRead(tempPotPin); // Read the pot value
-  delay(10);
-  tempLimitPotValue = analogRead(tempPotPin); // Read the pot value
-  tempLimitPotValue = map(tempLimitPotValue, 0, 1023, 20, 40); // Map the values from 20 to 40 degrees
-  //Serial.print("tp:");
-  //Serial.println(tempLimitPotValue);
+}
 
+void readSoilMoisture() {
+  uint16_t tempAnalogValue = 0;
+  tempAnalogValue = analogRead(MOIST_SENS1_PIN);
   delay(10);
-  humLimitPotValue = analogRead(humPotPin); // Read the pot value
-  delay(10);
-  humLimitPotValue = analogRead(humPotPin); // Read the pot value
-  humLimitPotValue = map(humLimitPotValue, 0, 1023, 20, 100); // Map the values from 20 to 100%
-  //Serial.print("hp:");
-  //Serial.println(humLimitPotValue);
+  tempAnalogValue = analogRead(MOIST_SENS1_PIN);
+  LOG_DEBUGLN(tempAnalogValue);
+  moisture = uint8_t(100 * (1 - ((double)(tempAnalogValue) / 1023)));
+}
 
-  buttonState = digitalRead(buttonPin); // Check for button press  
+void readTemperatureLimit() {
+  uint16_t tempAnalogReadVal = 0;
+  //read twice because of reading issues (sometimes)
+  tempAnalogReadVal = analogRead(TEMP_POT_PIN); // Read the pot value
+  delay(10);
+  tempAnalogReadVal = analogRead(TEMP_POT_PIN); // Read the pot value
+  tempLimitPotValue = map(tempAnalogReadVal, 0, 1023, 10, 100); // Map the values from 10 to 100 degrees
+}
+
+void readHumidityLimit() {
+  uint16_t tempAnalogReadVal = 0;
+  //read twice because of reading issues (sometimes)
+  tempAnalogReadVal = analogRead(HUM_POT_PIN); // Read the pot value
+  delay(10);
+  tempAnalogReadVal = analogRead(HUM_POT_PIN); // Read the pot value
+  humLimitPotValue = map(tempAnalogReadVal, 0, 1023, 20, 100); // Map the values from 20 to 100%
+}
+
+void readValues()
+{
+  if (true == read_from_am2320()) {
+    if (isnan(th.h) || isnan(th.t)) {
+      LOG_DEBUGLN("Invalid values from AM2320");
+    } else {
+      humSensorValue = th.h;
+      tempSensorValue = th.t;
+    }
+  } else {
+    LOG_DEBUGLN("Failed to get values from AM2320");
+  }
+
+  LOG_DEBUG("HUM: ");
+  LOG_DEBUGLN(humSensorValue);
+  LOG_DEBUG("TEMP: ");
+  LOG_DEBUGLN(tempSensorValue);
+
+  readSoilMoisture();
+  LOG_DEBUG("SOIL: ");
+  LOG_DEBUGLN(moisture);
+  delay(10);
+  readTemperatureLimit();
+  LOG_DEBUG2("tp:");
+  LOG_DEBUGLN2(tempLimitPotValue);
+  delay(10);
+  readHumidityLimit();
+  LOG_DEBUG2("hp:");
+  LOG_DEBUGLN2(humLimitPotValue);
+
+  buttonState = digitalRead(BTNPIN); // Check for button press
 }
 
 void turnServo(uint16_t degree)
 {
-  servo1.attach(servo1Pin); // Attaches the servo on pin 14 to the servo1 object
+  servo1.attach(SERVOPIN); // Attaches the servo on pin 14 to the servo1 object
   servo1.write(degree);  // Put servo1 at home position
   delay(3000);
   servo1.detach();  //detach not to disturb SoftwareSerial
@@ -384,48 +370,53 @@ void turnServo(uint16_t degree)
 
 void stateWorking()
 {
-  
+
   writeTempAndHumToLcd();
 
-  if (!hatchOpen && (tempSensorValue >= alertLevel ||( humSensorValue >= humLevel && tempSensorValue >= 20))){
-    //Serial.print("Alert! over ");
-    //Serial.print(alertLevel);
-    //Serial.print("degrees, open hatch\n");
+  if (!hatchOpen && (tempSensorValue >= alertLevel || ( humSensorValue >= humLevel && tempSensorValue >= 20))) {
+    LOG_DEBUG2("Alert! over ");
+    LOG_DEBUG2(alertLevel);
+    LOG_DEBUG2("degrees, open hatch\n");
     turnServo(90);
-    hatchOpen=true;
+    hatchOpen = true;
   }
-  if (hatchOpen && ((tempSensorValue <= alertLevel-2 && humSensorValue <= humLevel) || tempSensorValue <= 20)){
-    //Serial.print("Alert! less than ");
-    //Serial.print(alertLevel);
-    //Serial.print("(");
-    //Serial.print(tempSensorValue);
-    //Serial.print(") degrees, close hatch\n");
+  if (hatchOpen && ((tempSensorValue <= (alertLevel - 2) && humSensorValue <= (humLevel-2)) || tempSensorValue <= 20)) {
+    LOG_DEBUG2("Alert! less than ");
+    LOG_DEBUG2(alertLevel);
+    LOG_DEBUG2("(");
+    LOG_DEBUG2(tempSensorValue);
+    LOG_DEBUG2(") degrees, close hatch\n");
     turnServo(180);
-    hatchOpen=false;
-  }  
+    hatchOpen = false;
+  }
 }
 
 void writeTempAndHumToLcd() {
-  lcd.setCursor(0,0);
-  int temp = (int)tempSensorValue;
-  lcd.print(temp);
+  char float_str[10] = {0};
+  lcd.setCursor(0, 0);
+  dtostrf(tempSensorValue, 4, 1, float_str);
+  lcd.print(float_str);
   lcd.write(B11011111); // Degree symbol
   lcd.print("C ");
-  lcd.print("HUM=");
-  lcd.print(humSensorValue);
-  lcd.print("\%");
-  
-  if (temp>maxC) {
-    maxC=temp;
-  }
-  if (temp<minC) {
-    minC=temp;
-  }
-  lcd.setCursor(0,1);
+  memset(&float_str, 0, sizeof(float_str));
+  dtostrf(humSensorValue, 3, 1, float_str);
   lcd.print("H=");
+  lcd.print(float_str);
+  lcd.print("\%");
+
+  if ((int)tempSensorValue > maxC ||
+      ((int)tempSensorValue < maxC && maxC == 125 && (int)tempSensorValue != 0 )) {
+    maxC = (int)tempSensorValue;
+  }
+  if ((int)tempSensorValue < minC && minC != -125 ||
+      ((int)tempSensorValue > minC && minC == -125 && (int)tempSensorValue != 0 )) {
+    minC = (int)tempSensorValue;
+  }
+  lcd.setCursor(0, 1);
+  lcd.print("Hi=");
   lcd.print(maxC);
   lcd.write(B11011111);
-  lcd.print("C L=");
+  lcd.print("C Lo=");
   lcd.print(minC);
   lcd.write(B11011111);
   lcd.print("C ");
@@ -433,13 +424,13 @@ void writeTempAndHumToLcd() {
 
 void displaySetup() {
   lcd.clear();
-  lcd.setCursor(0,0);
+  lcd.setCursor(0, 0);
   lcd.print("T:");
   lcd.print(tempLimitPotValue);
   lcd.print("(");
   lcd.print(alertLevel);
   lcd.print(")          ");
-  lcd.setCursor(0,1);
+  lcd.setCursor(0, 1);
   lcd.print("H:");
   lcd.print(humLimitPotValue);
   lcd.print("(");
@@ -449,7 +440,7 @@ void displaySetup() {
 }
 
 void stateSetup()
-{   
+{
   displaySetup();
 }
 
