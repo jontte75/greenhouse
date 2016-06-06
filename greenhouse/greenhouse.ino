@@ -1,16 +1,18 @@
 /**
- * Greenhouse-project
- * - monitor temperature and humidity. If temperature rises too high (or humidity), then open the window
- * - monitor also soil humidity
- * - send data to thingspeak every 10 minutes
- * - note the "state" is just state of display
- */
+   Greenhouse-project
+   - monitor temperature and humidity. If temperature rises too high (or humidity), then open the window
+   - monitor also soil humidity
+   - send data to thingspeak every 10 minutes
+   - note the "state" is just state of display
+*/
 #include <SoftwareSerial.h>
 #include <LiquidCrystal595.h>
 #include <Servo.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <avr/pgmspace.h>
 #include <Wire.h>
 #include <AM2320.h>
-AM2320 th;
 
 /**
    only print stuff to serial if DEBUG-build,
@@ -56,16 +58,20 @@ byte state = STATE_INITIAL;
 #define TEMP_POT_PIN     A0
 #define HUM_POT_PIN      A1
 #define MOIST_SENS1_PIN  A2
+#define AM_USES1         A4
+#define AM_USES2         A5
+#define LIGHTSENS_PIN    A6
 
 //digital pin assignments
-#define LCDPIN1       2
-#define LCDPIN2       3
-#define LCDPIN3       4
-#define BTNPIN        5
-#define SERVOPIN      10
-#define SSERIALTX     11  //to RX on ESP-05
-#define SSERIALRX     12  //to TX on ESP-05
-#define ESPRESETPIN   13
+#define LCDPIN1          2
+#define LCDPIN2          3
+#define LCDPIN3          4
+#define BTNPIN           5
+#define DALLAS_ONE_WIRE  6
+#define SERVOPIN         10
+#define SSERIALTX        11  //to RX on ESP-05
+#define SSERIALRX        12  //to TX on ESP-05
+#define ESPRESETPIN      13
 
 // The baud rate of the serial interface
 #define SERIAL_BAUD  9600
@@ -84,9 +90,24 @@ uint8_t wifiCheckCntr = 0;
 boolean hatchOpen = false;
 uint8_t updateValuesCntr = 0;
 uint8_t moisture = 100;
-
+float  tempCase = 0; //temp inside the gadget
+float  tempOutside = 0; //temp outside the greenhouse
+uint16_t lightSensValue = 0;
+uint8_t forecedResetCntr = 0; //forcedly reset esp-05 to tackle some hanging issues
 unsigned long lastConnectionTime = 0;
 const unsigned long updateThingSpeakInterval = 600000; //send values to thingspeak every 10 minutes
+
+// Data wire of DS18B20 is plugged into digital pin 3
+
+
+// Setup a oneWire instance to communicate with any OneWire devices
+// (not just Maxim/Dallas temperature ICs)
+OneWire oneWire(DALLAS_ONE_WIRE);
+
+// Pass our oneWire reference to Dallas Temperature.
+DallasTemperature sensors(&oneWire);
+
+AM2320 th;
 
 // Initialize the library with the numbers of the interface pins
 LiquidCrystal595 lcd(LCDPIN1, LCDPIN2, LCDPIN3);
@@ -95,7 +116,7 @@ Servo servo1; // Create a servo object
 //wifi esp8266
 SoftwareSerial espSerial(SSERIALRX, SSERIALTX); // RX, TX
 
-#define BUFFER_SIZE 100
+#define BUFFER_SIZE 145
 char buffer[BUFFER_SIZE];
 
 #define WIFI_APN "WLANAPN1"
@@ -105,7 +126,7 @@ char buffer[BUFFER_SIZE];
 
 //functions
 
-void sendCommand ( const char * cmd,  uint16_t wait){
+void sendCommand ( const char * cmd,  uint16_t wait) {
   String tmpData = "";
   byte cntr = 0;
   LOG_DEBUGLN(cmd);
@@ -135,7 +156,7 @@ void setupWifi()
 {
   LOG_DEBUGLN("Restarting ESP");
   digitalWrite (ESPRESETPIN, LOW);
-  delay(5000);
+  delay(8000);
   digitalWrite (ESPRESETPIN, HIGH);
   delay(10000);
   clearSerialBuffer();
@@ -143,10 +164,10 @@ void setupWifi()
   sendCommand ("AT+RST", 8000);
   sendCommand ("AT+CWMODE=1", 2000 );
   sendCommand ("AT+CWJAP=\""
-                WIFI_APN
-                "\",\""
-                WIFI_PWD
-                "\"", 15000);
+               WIFI_APN
+               "\",\""
+               WIFI_PWD
+               "\"", 15000);
   sendCommand ("AT+CIFSR\r", 3000);
   sendCommand ("AT+GMR\r", 3000);
 }
@@ -181,12 +202,20 @@ void setup() {
   lcd.clear();
 
   pinMode(MOIST_SENS1_PIN, INPUT);
+  // Initialize the library for temperature sensors
+  sensors.begin();
+  delay(100);
+  //read values, especially potentiometer values, incase of restart
+  readValues();
+  alertLevel = tempLimitPotValue;
+  humLevel = humLimitPotValue;
 
   state = STATE_INITIAL;
 }
 
 void loop()
 {
+   
   lcd.setCursor(0, 0); // Set cursor to home position
   readValues();
   handleState();
@@ -203,8 +232,15 @@ void loop()
   if ((temp - lastConnectionTime) > updateThingSpeakInterval) {
     updateValues();
     lastConnectionTime = millis();
+    forecedResetCntr++;
   }
 
+  if (forecedResetCntr >0 && !(forecedResetCntr%72)){
+    // restart wifi as a workaround, might not help though...
+    forecedResetCntr=0;
+    setupWifi();
+  }
+  
   delay(1000);
 }
 
@@ -214,6 +250,9 @@ void updateValues()
   char float_str[10] = {0};
   char hum_str[10] = {0};
   char moist_str[10] = {0};
+  char out_str[10] = {0};
+  char case_str[10] = {0};
+
 
   snprintf(cmd, 59, "AT+CIPSTART=\"TCP\",\"%s\",80", THINGSPEAK_IP);
   espSerial.println(cmd);
@@ -222,12 +261,15 @@ void updateValues()
     LOG_DEBUG("Error1");
     return;
   }
-  snprintf(buffer, BUFFER_SIZE - 1, "%s&field1=%s&field2=%s&field3=%u&field4=%s\r\n",
+  snprintf(buffer, BUFFER_SIZE - 1, "%s&field1=%s&field2=%s&field3=%u&field4=%s&field5=%s&field6=%s&field7=%u\r\n",
            TS_GET,
            dtostrf(tempSensorValue, 4, 2, float_str),
            dtostrf(humSensorValue, 4, 2, hum_str),
            (hatchOpen) ? 1 : 0,
-           dtostrf(moisture, 4, 2, moist_str));
+           dtostrf(moisture, 4, 2, moist_str),
+           dtostrf(tempOutside, 4, 2, out_str),
+           dtostrf(tempCase, 4, 2, case_str),
+           lightSensValue);
 
   LOG_DEBUG(buffer);
   espSerial.print("AT+CIPSEND=");
@@ -255,7 +297,7 @@ void clearBuffer(void) {
 
 void handleState()
 {
-  if (buttonState == HIGH) { // Change scale state if pressed
+  if (buttonState == HIGH) {
     LOG_DEBUG("button pressed, state is");
     LOG_DEBUGLN(state);
     if (state == STATE_INITIAL || state == STATE_WORKING) {
@@ -329,6 +371,9 @@ void readHumidityLimit() {
 
 void readValues()
 {
+  //get dallas values
+  sensors.requestTemperatures();
+
   if (true == read_from_am2320()) {
     if (isnan(th.h) || isnan(th.t)) {
       LOG_DEBUGLN("Invalid values from AM2320");
@@ -357,6 +402,23 @@ void readValues()
   LOG_DEBUG2("hp:");
   LOG_DEBUGLN2(humLimitPotValue);
 
+  float tempCaseTemp = sensors.getTempCByIndex(0);
+  float tempOutsTemp = sensors.getTempCByIndex(1);
+  if (isnan(tempCaseTemp) || isnan(tempOutsTemp)) {
+    LOG_DEBUGLN("Could not get dallas temperature");
+  } else {
+    tempCase = tempCaseTemp;
+    tempOutside = tempOutsTemp;
+  }
+  LOG_DEBUG("to:");
+  LOG_DEBUGLN(tempOutsTemp);
+  LOG_DEBUG("tc:");
+  LOG_DEBUGLN(tempCaseTemp);
+
+  lightSensValue = analogRead(LIGHTSENS_PIN);
+  LOG_DEBUG("LDR:");
+  LOG_DEBUGLN(lightSensValue);
+
   buttonState = digitalRead(BTNPIN); // Check for button press
 }
 
@@ -380,7 +442,7 @@ void stateWorking()
     turnServo(90);
     hatchOpen = true;
   }
-  if (hatchOpen && ((tempSensorValue <= (alertLevel - 2) && humSensorValue <= (humLevel-2)) || tempSensorValue <= 20)) {
+  if (hatchOpen && ((tempSensorValue <= (alertLevel - 2) && humSensorValue <= (humLevel - 2)) || tempSensorValue <= 20)) {
     LOG_DEBUG2("Alert! less than ");
     LOG_DEBUG2(alertLevel);
     LOG_DEBUG2("(");
