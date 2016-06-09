@@ -1,6 +1,6 @@
-# README #
+# Greenhouse Project #
 
-This project contains source and frizing of project greenhouse automation
+This project contains source and frizing of a project to automate a small greenhouse.
 
 ### What is this repository for? ###
 
