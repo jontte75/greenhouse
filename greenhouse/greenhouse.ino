@@ -97,16 +97,13 @@ uint8_t forecedResetCntr = 0; //forcedly reset esp-05 to tackle some hanging iss
 unsigned long lastConnectionTime = 0;
 const unsigned long updateThingSpeakInterval = 600000; //send values to thingspeak every 10 minutes
 
-// Data wire of DS18B20 is plugged into digital pin 3
-
-
 // Setup a oneWire instance to communicate with any OneWire devices
-// (not just Maxim/Dallas temperature ICs)
 OneWire oneWire(DALLAS_ONE_WIRE);
 
 // Pass our oneWire reference to Dallas Temperature.
 DallasTemperature sensors(&oneWire);
 
+//initialize the AM2320 library 
 AM2320 th;
 
 // Initialize the library with the numbers of the interface pins
@@ -174,8 +171,8 @@ void setupWifi()
 
 void setup() {
   SERIAL_BEGIN(SERIAL_BAUD);
-  servo1.attach(SERVOPIN); // Attaches the servo on pin 14 to the servo1 object
-  servo1.write(180);  // Put servo1 at home position
+  servo1.attach(SERVOPIN);
+  servo1.write(180);  // Turn servo1 at "home" position
   delay(2000);
   servo1.detach();
 
@@ -205,6 +202,7 @@ void setup() {
   // Initialize the library for temperature sensors
   sensors.begin();
   delay(100);
+  
   //read values, especially potentiometer values, incase of restart
   readValues();
   alertLevel = tempLimitPotValue;
@@ -505,4 +503,3 @@ void stateSetup()
 {
   displaySetup();
 }
-
