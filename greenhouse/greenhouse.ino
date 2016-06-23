@@ -4,6 +4,15 @@
    - monitor also soil humidity
    - send data to thingspeak every 10 minutes
    - note the "state" is just state of display
+
+   Help and ideas have been gathered from many sources, thanx to all!
+   Examples taken from:
+   http://www.instructables.com/id/Hookup-a-16-pin-HD44780-LCD-to-an-Arduino-in-6-sec/
+   http://www.instructables.com/id/Temperature-with-DS18B20/
+   https://learn.adafruit.com/photocells/using-a-photocell
+   http://www.instructables.com/id/Connecting-AM2320-With-Arduino/
+   http://allaboutee.com/2015/01/02/esp8266-arduino-led-control-from-webpage/
+   and many other resources
 */
 #include <SoftwareSerial.h>
 #include <LiquidCrystal595.h>
