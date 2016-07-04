@@ -14,7 +14,7 @@
    http://allaboutee.com/2015/01/02/esp8266-arduino-led-control-from-webpage/
    and many other resources
 */
-#include <SoftwareSerial.h>
+
 #include <LiquidCrystal595.h>
 #include <Servo.h>
 #include <OneWire.h>
@@ -22,40 +22,8 @@
 #include <avr/pgmspace.h>
 #include <Wire.h>
 #include <AM2320.h>
-
-/**
-   only print stuff to serial if DEBUG-build,
-   disabling Serial frees alot of memory!
-*/
-
-#define DEBUG 0
-
-#if (DEBUG > 0)
-#define SERIAL_BEGIN(_sbaud)\
-  Serial.begin(_sbaud);
-#else
-#define SERIAL_BEGIN(_sbaud)
-#endif
-
-#if (DEBUG > 0)
-#define LOG_DEBUGLN(_log)\
-  Serial.println(_log);
-#define LOG_DEBUG(_log)\
-  Serial.print(_log);
-#else
-#define LOG_DEBUGLN(_log)
-#define LOG_DEBUG(_log)
-#endif
-
-#if (DEBUG > 1)
-#define LOG_DEBUGLN2(_log)\
-  Serial.println(_log);
-#define LOG_DEBUG2(_log)\
-  Serial.print(_log);
-#else
-#define LOG_DEBUGLN2(_log)
-#define LOG_DEBUG2(_log)
-#endif
+#include "greenhouse_log.h"
+#include "updateThingspeak.h"
 
 //state handling
 #define STATE_INITIAL   0
@@ -86,6 +54,12 @@ byte state = STATE_INITIAL;
 #define SERIAL_BAUD  9600
 #define ESP8266_BAUD 9600
 
+//Wifi and Thingspeak
+#define WIFI_SSID "YOURWIFISSID"
+#define WIFI_PWD "YOURWIFIPWD"
+#define THINGSPEAK_IP "184.106.153.149"
+#define TS_WKEY "TSWRITEKEY"
+
 //global variables
 int8_t  maxC = 125, minC = -125;
 float   tempSensorValue = 0;
@@ -109,98 +83,43 @@ const unsigned long updateThingSpeakInterval = 600000; //send values to thingspe
 // Setup a oneWire instance to communicate with any OneWire devices
 OneWire oneWire(DALLAS_ONE_WIRE);
 
-// Pass our oneWire reference to Dallas Temperature.
+// Pass the oneWire reference to Dallas Temperature.
 DallasTemperature sensors(&oneWire);
 
-//initialize the AM2320 library 
+//initialize the AM2320 library
 AM2320 th;
 
-// Initialize the library with the numbers of the interface pins
+// Initialize the LCD library with the interface pins
 LiquidCrystal595 lcd(LCDPIN1, LCDPIN2, LCDPIN3);
 Servo servo1; // Create a servo object
 
-//wifi esp8266
-SoftwareSerial espSerial(SSERIALRX, SSERIALTX); // RX, TX
 
-#define BUFFER_SIZE 145
-char buffer[BUFFER_SIZE];
+//Initialize update thingspeak
+UpdateThingspeak* updateTs;
 
-#define WIFI_APN "WLANAPN1"
-#define WIFI_PWD "THISISYOURPWD1"
-#define THINGSPEAK_IP "184.106.153.149"
-#define TS_GET "GET /update?key=TSWRITEKEY123456"
 
-//functions
-
-void sendCommand ( const char * cmd,  uint16_t wait) {
-  String tmpData = "";
-  byte cntr = 0;
-  LOG_DEBUGLN(cmd);
-resend:
-  espSerial.println(cmd);
-  delay(10);
-  while (espSerial.available() > 0 )  {
-    char c = espSerial.read();
-    tmpData += c;
-
-    if ( tmpData.indexOf(cmd) > -1 )
-      tmpData = "";
-    else
-      tmpData.trim();
-  }
-  if (tmpData.indexOf("busy") > -1 ) {
-    LOG_DEBUGLN("busy");
-    delay(100);
-    tmpData = "";
-    if (++cntr < 10) goto resend;
-  }
-  LOG_DEBUGLN(tmpData);
-  delay(wait);
-}
-
-void setupWifi()
-{
-  LOG_DEBUGLN("Restarting ESP");
-  digitalWrite (ESPRESETPIN, LOW);
-  delay(8000);
-  digitalWrite (ESPRESETPIN, HIGH);
-  delay(10000);
-  clearSerialBuffer();
-  sendCommand ("AT+CIOBAUD=9600", 1000);
-  sendCommand ("AT+RST", 8000);
-  sendCommand ("AT+CWMODE=1", 2000 );
-  sendCommand ("AT+CWJAP=\""
-               WIFI_APN
-               "\",\""
-               WIFI_PWD
-               "\"", 15000);
-  sendCommand ("AT+CIFSR\r", 3000);
-  sendCommand ("AT+GMR\r", 3000);
-}
+/*---------------------setup and main loop---------------------*/
 
 void setup() {
-  SERIAL_BEGIN(SERIAL_BAUD);
+  //SERIAL_BEGIN(SERIAL_BAUD);
+  Serial.begin(9600);
+  delay(500);
   servo1.attach(SERVOPIN);
   servo1.write(180);  // Turn servo1 at "home" position
   delay(2000);
   servo1.detach();
-
-  // Open serial communications and wait for port to open:
-  espSerial.begin(ESP8266_BAUD);
-  espSerial.setTimeout(15000);
-  delay(3000);
+  
   LOG_DEBUGLN("\nStarting up...");
+  updateTs = new UpdateThingspeak(SSERIALRX, SSERIALTX, ESP8266_BAUD, ESPRESETPIN, WIFI_SSID, WIFI_PWD, THINGSPEAK_IP, TS_WKEY);
   analogReference(DEFAULT);
   pinMode(BTNPIN, INPUT);
-  pinMode(ESPRESETPIN, OUTPUT);
-  digitalWrite (ESPRESETPIN, HIGH);
 
   lcd.begin(16, 2); // Set the display to 16 columns and 2 rows
   lcd.clear();
   lcd.setCursor(0, 0);
 
   lcd.print("Setting up Wifi.");
-  setupWifi();
+  updateTs->setupWifi();
 
   lcd.setCursor(0, 0);
   lcd.print("Wifi is set up.");
@@ -211,96 +130,54 @@ void setup() {
   // Initialize the library for temperature sensors
   sensors.begin();
   delay(100);
-  
+
   //read values, especially potentiometer values, incase of restart
   readValues();
   alertLevel = tempLimitPotValue;
   humLevel = humLimitPotValue;
 
   state = STATE_INITIAL;
+
+  // Timer0 is already used for millis() - we'll just interrupt somewhere
+  // in the middle and call the "Compare A" function below
+  OCR0A = 0xAF;
+  TIMSK0 |= _BV(OCIE0A);
 }
 
+SIGNAL(TIMER0_COMPA_vect)
+{
+  /**@TODO add functionality and cleanup main loop */
+  unsigned long currentMillis = millis();
+}
+
+//The main loop
 void loop()
 {
-   
   lcd.setCursor(0, 0); // Set cursor to home position
   readValues();
   handleState();
   if (!(++wifiCheckCntr)) {
-    espSerial.println("AT+GMR\r");
-    if (espSerial.find((char*)"OK")) {
-      LOG_DEBUGLN("Wifi OK");
-    } else {
-      LOG_DEBUGLN("Wifi NOK, restart WIfi");
-      setupWifi();
+    if (SUCCESS != updateTs->checkIsEspResponsive()) {
+      updateTs->setupWifi();
     }
   }
+ 
   long temp = millis();
   if ((temp - lastConnectionTime) > updateThingSpeakInterval) {
-    updateValues();
+    updateTs->updateValues(tempSensorValue, humSensorValue, (hatchOpen) ? 1 : 0, moisture, tempOutside, tempCase, lightSensValue);
     lastConnectionTime = millis();
     forecedResetCntr++;
   }
 
-  if (forecedResetCntr >0 && !(forecedResetCntr%72)){
+  if (forecedResetCntr > 0 && !(forecedResetCntr % 72)) {
     // restart wifi as a workaround, might not help though...
-    forecedResetCntr=0;
-    setupWifi();
+    forecedResetCntr = 0;
+    updateTs->setupWifi();
   }
-  
-  delay(1000);
+
+  delay(1000);//this might not be necessary, and disturbs handling of "set" button
 }
 
-void updateValues()
-{
-  char cmd[60] = {0};
-  char float_str[10] = {0};
-  char hum_str[10] = {0};
-  char moist_str[10] = {0};
-  char out_str[10] = {0};
-  char case_str[10] = {0};
-
-
-  snprintf(cmd, 59, "AT+CIPSTART=\"TCP\",\"%s\",80", THINGSPEAK_IP);
-  espSerial.println(cmd);
-  delay(2000);
-  if (espSerial.find((char*)"Error")) {
-    LOG_DEBUG("Error1");
-    return;
-  }
-  snprintf(buffer, BUFFER_SIZE - 1, "%s&field1=%s&field2=%s&field3=%u&field4=%s&field5=%s&field6=%s&field7=%u\r\n",
-           TS_GET,
-           dtostrf(tempSensorValue, 4, 2, float_str),
-           dtostrf(humSensorValue, 4, 2, hum_str),
-           (hatchOpen) ? 1 : 0,
-           dtostrf(moisture, 4, 2, moist_str),
-           dtostrf(tempOutside, 4, 2, out_str),
-           dtostrf(tempCase, 4, 2, case_str),
-           lightSensValue);
-
-  LOG_DEBUG(buffer);
-  espSerial.print("AT+CIPSEND=");
-  espSerial.println(strlen(buffer));
-
-  if (espSerial.find((char*)">")) {
-    espSerial.print(buffer);
-  }
-  else {
-    espSerial.println("AT+CIPCLOSE");
-  }
-}
-
-void clearSerialBuffer(void) {
-  while ( espSerial.available() > 0 ) {
-    espSerial.read();
-  }
-}
-
-void clearBuffer(void) {
-  for (int i = 0; i < BUFFER_SIZE; i++ ) {
-    buffer[i] = 0;
-  }
-}
 
 void handleState()
 {
@@ -342,7 +219,6 @@ bool read_from_am2320() {
       return false;
       break;
     default:
-
       break;
   }
   return true;
@@ -512,3 +388,4 @@ void stateSetup()
 {
   displaySetup();
 }
+
