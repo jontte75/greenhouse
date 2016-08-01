@@ -1,15 +1,6 @@
 
 #include "updateThingspeak.h"
 
-
-#define MAX_APN_LEN    20
-#define MAX_PWD_LEN    20
-#define MAX_IP_STR_LEN 16
-#define MAX_TS_KEY_LEN 20
-#define SUCCESS 1
-#define FAILURE 0
-#define BUFFER_SIZE 145
-
 UpdateThingspeak::UpdateThingspeak(short rxPin,
                                    short txPin,
                                    short baud,
