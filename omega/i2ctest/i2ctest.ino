@@ -1,64 +1,89 @@
+// Simple I2C slave for testing I2C
 // Modified example by  Nicholas Zambetti <http://www.zambetti.com> 
 #include <Wire.h>
 
-byte command = 0xff;
+// Some definitions to be used
+#define I2C_INDICATORLED  LED_BUILTIN
+#define I2C_CLOCKSPEEDHZ  3400000
+#define I2C_SLAVEID       0x10
+#define I2C_CMD_HELLO     0x00
+#define I2C_CMD_REQUEST   0x01
+#define I2C_CMD_SET       0x02
+#define I2C_INITIAL_VAL   0xFF
+#define I2C_BUFFER_SZ     0x07
+#define SERIAL_BAUDRATE   9600
+
+// Some global variables
+byte command = I2C_INITIAL_VAL;
+uint8_t buffer[I2C_BUFFER_SZ]={1, 2, 3, (uint8_t)(-4), 5, 6, I2C_INITIAL_VAL};
 
 void setup() {
-  pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN, LOW);
-  Wire.begin(0x10);
+  pinMode(I2C_INDICATORLED, OUTPUT);
+  digitalWrite(I2C_INDICATORLED, LOW);
+  Wire.begin(I2C_SLAVEID);
+  Wire.setClock(I2C_CLOCKSPEEDHZ);
   Wire.onRequest(requestEvent);
   Wire.onReceive(receiveEvent);
-  Serial.begin(9600);
+  Serial.begin(SERIAL_BAUDRATE);
 }
 
 void loop() {
+  // count the simple checksum byte
+  // in real life, buffer will be filled with correct values in this main loop
+  // the buffer will be initialized with values so that master will recognize 
+  // invalid/initial values.
+  buffer[I2C_BUFFER_SZ-1] = (uint8_t)((buffer[0]+buffer[1]+buffer[2]+buffer[3]+buffer[4]+buffer[5])/6);
   delay(100);
 }
 
-// function that executes whenever data is requested by master
-// this function is registered as an event, see setup()
+//Request Event callback function, will be called when master reads from I2C bus
 void requestEvent() {
-  static byte buffer[6]={1,2,3,-4,5,6};
   Serial.print("request, command: "); Serial.println(command, HEX);
-
+  digitalWrite(I2C_INDICATORLED, !digitalRead(I2C_INDICATORLED));
   switch (command){
-    case 0x00:
+    case I2C_CMD_HELLO:
       //hello, to check connection is OK
-      Wire.write("Hello!",6);
+      Wire.write("Hello!");
       break;
-    case 0x01:
+    case I2C_CMD_REQUEST:
       //get data
-      Wire.write(buffer,6);
+      Wire.write(&buffer[0],sizeof(buffer));
       break;
-    case 0xff:
-      //initial value, just blink
-      digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
-      Wire.write(0xfe);
+    case I2C_CMD_SET:
+      //we could toggle some led or something else
+      Wire.write(I2C_INITIAL_VAL);
       break;
     default:
-       Wire.write(19);
+       Wire.write(I2C_INITIAL_VAL);
   }
-  //command = 0xff;
+  //flush
+  while(Wire.available()){
+    Wire.read();
+  }
 }
 
+// Receive Event callback, called when master writes data to I2C bus
 void receiveEvent(int bytes)
 {
   byte addr =  Wire.read();
   byte cmd = Wire.read();
   switch (cmd) {
-    case 0: // i2cset -y 0 0x08 0x00
-      digitalWrite(LED_BUILTIN, HIGH);
-      //Serial.print("toggled led\n");
-      command = 0x00;
+    case 0:
+      command = I2C_CMD_HELLO;
       break;
     case 1:
-      command = 0x01;
+      command = I2C_CMD_REQUEST;
       break;
-    case 255:
+    case 2:
+      command = I2C_CMD_SET;
       break;
     default:
       Serial.print("error, unexpected command value ");
-      Serial.print(cmd);
+      Serial.println(cmd);
+  }
+  digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+  //flush
+  while(Wire.available()){
+    Wire.read();
   }
 }
