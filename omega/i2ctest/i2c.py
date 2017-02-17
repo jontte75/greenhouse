@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import time
 import sys 
 import array
@@ -11,12 +12,11 @@ def get_float(data, index):
 
 def print_w_header(str_to_be_printed):
     """print a string w/ header """
-    #this is not python3 compatible!
-    print "#"*(len(str_to_be_printed)+6)
-    print "# ",
-    print str_to_be_printed,
-    print " #"
-    print "#"*(len(str_to_be_printed)+6)
+    print("#"*(len(str_to_be_printed)+6))
+    print("# "),
+    print(str_to_be_printed),
+    print(" #")
+    print("#"*(len(str_to_be_printed)+6))
 
 def handle_cmd_line_args():
     """Handle command line options"""
@@ -26,7 +26,7 @@ def handle_cmd_line_args():
     parser = parser.parse_args()
     parser.loop = int(parser.loop)
     if (parser.loop < 0 or parser.loop > 100):
-        print "Invalid loop count, should be between 0..100"
+        print("Invalid loop count, should be between 0..100")
         sys.exit(-1)
     return parser
 
@@ -59,9 +59,12 @@ while (1):
     val = i2c.readBytes(devAddr, 0x00, 9)
     addr = val[0]
     value = array.array('B', val[3:]).tostring()
-    print('Read returned: ', val)
-    print('addr:', addr)
-    print('value:', value)
+    print('Read returned: '),
+    print(val)
+    print('addr:'),
+    print(addr)
+    print('value:'),
+    print(value)
     if ("Hello" in value):
         #OK we received the Hello String
         break;
@@ -91,19 +94,23 @@ while (loop_ctrl):
                     get_float(val[3:], 5))/6
 
     if ((round(checksum, 2) != round(cnt_checksum, 2)) or (int(cnt_checksum) == 0xFF)):
-        print("FAILURE: Invalid checksum! value: ", val)
-        print('checksum: ', checksum)
+        print("FAILURE: Invalid checksum! value: "),
+        print(val)
+        print("checksum: "),
+        print(checksum)
         #something went wrong, so sleep a little bit longer
         time.sleep(10)
     else:
-        print 'SUCCESS: value: ',
-        print '%f '%get_float(val[3:], 1),
-        print '%f '%get_float(val[3:], 2),
-        print '%f '%get_float(val[3:], 3),
-        print '%f '%get_float(val[3:], 4),
-        print '%f '%get_float(val[3:], 5)
-        print("checksum: ", checksum)
+        print("SUCCESS: value: "),
+        print("%f "%get_float(val[3:], 0)),
+        print("%f "%get_float(val[3:], 1)),
+        print("%f "%get_float(val[3:], 2)),
+        print("%f "%get_float(val[3:], 3)),
+        print("%f "%get_float(val[3:], 4)),
+        print("%f "%get_float(val[3:], 5))
+        print("checksum: "),
+        print(checksum)
         time.sleep(1)
     #do not update loop_ctrl if infinitive loop is chosen
     loop_ctrl -= 0 if (cmdLineArgs.loop == 0) else 1
-print('Done!')
+print 'Done!'
