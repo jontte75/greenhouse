@@ -1,5 +1,7 @@
 // Simple I2C slave for testing I2C
-// Modified example by  Nicholas Zambetti <http://www.zambetti.com> 
+// Thanks!
+// Modified example by  Nicholas Zambetti <http://www.zambetti.com>
+// gileri: https://gist.github.com/gileri/5a9285d6a1cfde142260 for float example  
 #include <Wire.h>
 
 // Some definitions to be used
@@ -15,7 +17,7 @@
 
 // Some global variables
 byte command = I2C_INITIAL_VAL;
-uint8_t buffer[I2C_BUFFER_SZ]={1, 2, 3, (uint8_t)(-4), 5, 6, I2C_INITIAL_VAL};
+float buffer[I2C_BUFFER_SZ]={1, 2, 3, -4, 5, 6, I2C_INITIAL_VAL};
 
 void setup() {
   pinMode(I2C_INDICATORLED, OUTPUT);
@@ -32,7 +34,7 @@ void loop() {
   // in real life, buffer will be filled with correct values in this main loop
   // the buffer will be initialized with values so that master will recognize 
   // invalid/initial values.
-  buffer[I2C_BUFFER_SZ-1] = (uint8_t)((buffer[0]+buffer[1]+buffer[2]+buffer[3]+buffer[4]+buffer[5])/6);
+  buffer[I2C_BUFFER_SZ-1] = (float)((buffer[0]+buffer[1]+buffer[2]+buffer[3]+buffer[4]+buffer[5])/6);
   delay(100);
 }
 
@@ -47,7 +49,7 @@ void requestEvent() {
       break;
     case I2C_CMD_REQUEST:
       //get data
-      Wire.write(&buffer[0],sizeof(buffer));
+      Wire.write((byte*)&buffer[0], sizeof(buffer));
       break;
     case I2C_CMD_SET:
       //we could toggle some led or something else
