@@ -6,7 +6,7 @@
 
 // Some definitions to be used
 #define I2C_INDICATORLED  LED_BUILTIN
-#define I2C_CLOCKSPEEDHZ  3400000
+#define I2C_CLOCKSPEEDHZ  1000000L
 #define I2C_SLAVEID       0x10
 #define I2C_CMD_HELLO     0x00
 #define I2C_CMD_REQUEST   0x01
@@ -17,7 +17,7 @@
 
 // Some global variables
 byte command = I2C_INITIAL_VAL;
-float buffer[I2C_BUFFER_SZ]={1, 2, 3, -4, 5, 6, I2C_INITIAL_VAL};
+float buffer[I2C_BUFFER_SZ]={1, 2.1, 3.4, -4, 5, 6, I2C_INITIAL_VAL};
 
 void setup() {
   pinMode(I2C_INDICATORLED, OUTPUT);

@@ -53,12 +53,12 @@ while (1):
     val = i2c.writeByte(devAddr, 0x00, 0x00)
 
     #take a short break
-    time.sleep(2)
+    time.sleep(1)
 
     # read value from arduino
     val = i2c.readBytes(devAddr, 0x00, 9)
     addr = val[0]
-    value = array.array('B', val[3:]).tostring()
+    value = array.array('B', val[1:]).tostring()
     print('Read returned: '),
     print(val)
     print('addr:'),
@@ -80,10 +80,10 @@ while (loop_ctrl):
     val = i2c.writeByte(devAddr, 0x00, 0x01)
 
     #take a short break
-    time.sleep(2)
+    time.sleep(1)
 
     # read value from arduino
-    val = i2c.readBytes(devAddr, 0x00, (4*7)+3)
+    val = i2c.readBytes(devAddr, 0x00, (7*4)+3)
     addr = val[0]
     checksum = get_float(val[3:], 6)
     cnt_checksum = (get_float(val[3:], 0)+
@@ -99,7 +99,7 @@ while (loop_ctrl):
         print("checksum: "),
         print(checksum)
         #something went wrong, so sleep a little bit longer
-        time.sleep(10)
+        time.sleep(5)
     else:
         print("SUCCESS: value: "),
         print("%f "%get_float(val[3:], 0)),
@@ -110,7 +110,8 @@ while (loop_ctrl):
         print("%f "%get_float(val[3:], 5))
         print("checksum: "),
         print(checksum)
-        time.sleep(1)
+
     #do not update loop_ctrl if infinitive loop is chosen
     loop_ctrl -= 0 if (cmdLineArgs.loop == 0) else 1
+    time.sleep(10)
 print 'Done!'
