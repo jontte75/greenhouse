@@ -13,3 +13,15 @@ SDA<-------------------------------->|   |<------------------------->SDA
                                      -----           
 </pre>
 Arduino will work in slave mode, so that Omega2 will ask for data or toggle a led (nr 13)
+
+##i2c.py
+This will work as a master and requests data from arduino.
+First a hello and then some data (with simple checksum)
+
+<pre>
+In Omega2 required packages:
+opkg install python-light pyOnionI2C 
+opkg install python-codecs
+</pre>
+
+run ***i2c.py -h***  for help
