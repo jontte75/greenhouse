@@ -47,35 +47,40 @@ byte state = STATE_INITIAL;
 
 //I2C related
 #define I2C_INDICATORLED  13
-//#define I2C_CLOCKSPEEDHZ  10000L
 #define I2C_SLAVEID       0x10
 #define I2C_CMD_HELLO     0x00
-#define I2C_CMD_REQUEST   0x01
-#define I2C_CMD_REQUEST2  0x02
-#define I2C_CMD_SET       0x0A
+#define I2C_CMD_GET_DATA_SET1   0x01
+#define I2C_CMD_GET_DATA_SET2   0x02
+#define I2C_CMD_TOGGLE_WATER    0x0A
+#define I2C_CMD_TOGGLE_LIGHT    0x0B
 #define I2C_INITIAL_VAL   0xFF
-#define I2C_BUFFER_SZ     0x07
-#define I2C_BUFFER2_SZ    0x02
+#define I2C_BUFFER_SZ     0x06
+#define I2C_BUFFER2_SZ    0x03
 
 // The baud rate of the serial interface
 #define SERIAL_BAUD  9600
 
-//global variables
-int8_t  maxC = 125, minC = -125;
+//
+#define READINTERVAL (10*1000)
+
+//global variables sent outside
 float   tempSensorValue = 0;
-uint8_t tempLimitPotValue = 0;
 float   humSensorValue = 0;
-uint8_t humLimitPotValue = 0;
-uint8_t buttonState = LOW;
-uint8_t alertLevel  = 30;
-uint8_t humLevel = 80;
 boolean hatchOpen = false;
-uint8_t updateValuesCntr = 0;
 uint8_t moisture = 100;
 float  tempCase = 0; //temp inside the gadget
 float  tempOutside = 0; //temp outside the greenhouse
 uint16_t lightSensValue = 0;
 
+//global internally used
+int8_t  maxC = 125, minC = -125;
+uint8_t tempLimitPotValue = 0; //these values vary, use when set
+uint8_t humLimitPotValue = 0;  //these values vary, use when set
+uint8_t buttonState = LOW;
+uint8_t alertLevel  = 30; //alert level for temp stored from tempLimitPotValue
+uint8_t humLevel    = 80; //alert level for humidy stored from humLimitPotValue
+uint8_t updateValuesCntr = 0;
+unsigned long lastTimeReadValues = 0;
 
 // Setup a oneWire instance to communicate with any OneWire devices
 OneWire oneWire(DALLAS_ONE_WIRE);
@@ -93,26 +98,27 @@ Servo servo1; // Create a servo object
 // Some global variables
 volatile byte command = I2C_INITIAL_VAL;
 volatile uint8_t i2c_ongoing = 0;
-volatile float buffer[I2C_BUFFER_SZ]={1, 2.1, 3.4, -4, 5, 6, I2C_INITIAL_VAL};
-
+volatile static float buffer[I2C_BUFFER_SZ]={I2C_INITIAL_VAL};
+volatile static float buffer2[I2C_BUFFER2_SZ]={I2C_INITIAL_VAL};
 /*---------------------setup and main loop---------------------*/
 
 void setup() {
+  SERIAL_BEGIN(SERIAL_BAUD);
+  delay(500);
+  LOG_DEBUGLN("\nStarting up...");
   lcd.begin(16, 2); // Set the display to 16 columns and 2 rows
   lcd.clear();
   lcd.setCursor(0, 0);
-  lcd.print("Setting up I2C.");
+  lcd.print("Set up I2C.");
   Wire.begin(I2C_SLAVEID);
-  //Wire.setClock(I2C_CLOCKSPEEDHZ);
   Wire.onRequest(requestEvent);
   Wire.onReceive(receiveEvent);
-  delay(5000);
+  delay(2000);
   lcd.clear();
-  SERIAL_BEGIN(SERIAL_BAUD);
-  delay(500);
+  lcd.setCursor(0, 0);
+  lcd.print("Set up servo.");
   turnServo(180);
   
-  LOG_DEBUGLN("\nStarting up...");
   analogReference(DEFAULT);
   pinMode(BTNPIN, INPUT);
 
@@ -120,11 +126,15 @@ void setup() {
   pinMode(I2C_INDICATORLED, OUTPUT);
 
   // Initialize the library for temperature sensors
+  delay(300);
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Set up sensors.");
   sensors.begin();
   delay(100);
 
   //read values, especially potentiometer values, incase of restart
-  readValues();
+  readValues(0,true);
   alertLevel = tempLimitPotValue;
   humLevel = humLimitPotValue;
 
@@ -134,32 +144,30 @@ void setup() {
   // in the middle and call the "Compare A" function below
   OCR0A = 0xAF;
   TIMSK0 |= _BV(OCIE0A);
+  delay(300);
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Setups done.");
+  delay(3000);
 }
 
 SIGNAL(TIMER0_COMPA_vect)
 {
-  /**@TODO add functionality and cleanup main loop */
   unsigned long currentMillis = millis();
+  readValues(currentMillis, false);
 }
 
 //Request Event callback function, will be called when master reads from I2C bus
 void requestEvent() {
-  //LOG_DEBUG("request, command: ");
-  //LOG_DEBUGLN(command);
-  //digitalWrite(I2C_INDICATORLED, !digitalRead(I2C_INDICATORLED));
   switch (command){
     case I2C_CMD_HELLO:
-      //hello, to check connection is OK
       Wire.write("Hello!");
       break;
-    case I2C_CMD_REQUEST:
-      //get data
+    case I2C_CMD_GET_DATA_SET1:
       Wire.write((byte*)&buffer[0], sizeof(buffer));
-      //Wire.write("Shit!");
       break;
-    case I2C_CMD_SET:
-      //we could toggle some led or something else
-      Wire.write(I2C_INITIAL_VAL);
+    case I2C_CMD_GET_DATA_SET2:
+      Wire.write((byte*)&buffer2[0], sizeof(buffer2));
       break;
     default:
        Wire.write(I2C_INITIAL_VAL);
@@ -169,28 +177,42 @@ void requestEvent() {
     Wire.read();
   }
   i2c_ongoing = 0;
+  //digitalWrite(I2C_INDICATORLED, !digitalRead(I2C_INDICATORLED));
 }
 
 // Receive Event callback, called when master writes data to I2C bus
 void receiveEvent(int bytes)
 {
-  byte addr =  Wire.read();
+  //digitalWrite(I2C_INDICATORLED, !digitalRead(I2C_INDICATORLED));
+  (void)Wire.read();//address
   byte cmd = Wire.read();
   switch (cmd) {
-    case 0:
-      command = I2C_CMD_HELLO;
+    case I2C_CMD_HELLO:
+      command = cmd;
       break;
-    case 1:
-      command = I2C_CMD_REQUEST;
+    case I2C_CMD_GET_DATA_SET1:
+      buffer[0] = tempSensorValue;
+      buffer[1] = humSensorValue;
+      buffer[2] = tempCase;
+      buffer[3] = tempOutside;
+      buffer[4] = lightSensValue;
+      buffer[I2C_BUFFER_SZ-1] = (float)((buffer[0]+buffer[1]+buffer[2]+buffer[3]+buffer[4])/5);
+      command = cmd;
       break;
-    case 2:
-      command = I2C_CMD_REQUEST2;
+    case I2C_CMD_GET_DATA_SET2:
+      buffer2[0] = moisture;
+      buffer2[1] = hatchOpen;
+      buffer2[I2C_BUFFER2_SZ-1] = (float)((buffer2[0]+buffer2[1])/2);
+      command = cmd;
+      break;
+    case I2C_CMD_TOGGLE_WATER:
+    case I2C_CMD_TOGGLE_LIGHT:
+      command = I2C_INITIAL_VAL;
       break;
     default:
-      LOG_DEBUG("Unexpected command value ");
-      LOG_DEBUGLN(cmd);
+      LOG_ERROR("Unexpected command value ");
+      LOG_ERRORLN(cmd);
   }
-  //digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
   //flush
   while(Wire.available()){
     Wire.read();
@@ -202,21 +224,7 @@ void receiveEvent(int bytes)
 void loop()
 {
   lcd.setCursor(0, 0); // Set cursor to home position
-  //@todo move reading of values to timer handling
-  readValues();
   handleState();
-
-  buffer[0] = tempSensorValue;
-  buffer[1] = humSensorValue;
-  buffer[2] = tempCase;
-  buffer[3] = tempOutside;
-  buffer[4] = lightSensValue;
-  buffer[5] = hatchOpen;
-  buffer[I2C_BUFFER_SZ-1] = (float)((buffer[0]+buffer[1]+buffer[2]+buffer[3]+buffer[4]+buffer[5])/6);
-  //buffer2[0] = moisture;
-  //buffer2[I2C_BUFFER_SZ-1] = (float)((buffer2[0])/1);
-
-  //delay(100);//this might not be necessary, and disturbs handling of "set" button
 }
 
 
@@ -252,11 +260,11 @@ void handleState()
 bool read_from_am2320() {
   switch (th.Read()) {
     case 2:
-      LOG_DEBUGLN("CRC failed");
+      LOG_ERRORLN("CRC failed");
       return false;
       break;
     case 1:
-      LOG_DEBUGLN("Sensor offline");
+      LOG_ERRORLN("Sensor offline");
       return false;
       break;
     default:
@@ -284,7 +292,7 @@ void readTemperatureLimit() {
 }
 
 void readHumidityLimit() {
-  uint16_t tempAnalogReadVal = 0;
+  uint16_t tempAnalogReadVal = 0; 
   //read twice because of reading issues (sometimes)
   tempAnalogReadVal = analogRead(HUM_POT_PIN); // Read the pot value
   delay(10);
@@ -292,21 +300,26 @@ void readHumidityLimit() {
   humLimitPotValue = map(tempAnalogReadVal, 0, 1023, 20, 100); // Map the values from 20 to 100%
 }
 
-void readValues()
+void readValues(unsigned long currentMillis, bool isInitial)
 {
-  if (i2c_ongoing) return;
+  if (i2c_ongoing || (((currentMillis-lastTimeReadValues) < READINTERVAL) && !isInitial)){
+    return;
+  }
+  LOG_ERRORLN("Reading values...");
+  lastTimeReadValues = millis();
+
   //get dallas values
   sensors.requestTemperatures();
 
   if (true == read_from_am2320()) {
     if (isnan(th.h) || isnan(th.t)) {
-      LOG_DEBUGLN("Invalid values from AM2320");
+      LOG_ERRORLN("Invalid values from AM2320");
     } else {
       humSensorValue = th.h;
       tempSensorValue = th.t;
     }
   } else {
-    LOG_DEBUGLN("Failed to get values from AM2320");
+    LOG_ERROR("Failed to get values from AM2320");
   }
   LOG_DEBUG("HUM: ");
   LOG_DEBUGLN(humSensorValue);

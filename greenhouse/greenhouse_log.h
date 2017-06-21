@@ -15,6 +15,16 @@
 #endif
 
 #if (DEBUG > 0)
+#define LOG_ERRORLN(_log)\
+  Serial.println(_log);
+#define LOG_ERROR(_log)\
+  Serial.print(_log);
+#else
+#define LOG_ERRORLN(_log)
+#define LOG_ERROR(_log)
+#endif
+
+#if (DEBUG > 1)
 #define LOG_DEBUGLN(_log)\
   Serial.println(_log);
 #define LOG_DEBUG(_log)\
@@ -24,7 +34,7 @@
 #define LOG_DEBUG(_log)
 #endif
 
-#if (DEBUG > 1)
+#if (DEBUG > 2)
 #define LOG_DEBUGLN2(_log)\
   Serial.println(_log);
 #define LOG_DEBUG2(_log)\
