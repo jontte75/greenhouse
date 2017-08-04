@@ -5,7 +5,7 @@
 #ifndef __GREENHOUSE_LOG__
 #define __GREENHOUSE_LOG__ 
 
-#define DEBUG 1
+#define DEBUG 2
 
 #if (DEBUG > 0)
 #define SERIAL_BEGIN(_sbaud)\

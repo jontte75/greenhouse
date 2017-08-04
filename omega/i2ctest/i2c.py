@@ -56,7 +56,7 @@ while (1):
     time.sleep(1)
 
     # read value from arduino
-    val = i2c.readBytes(devAddr, 0x00, 9)
+    val = i2c.readBytes(devAddr, 0x00, 7)
     addr = val[0]
     value = array.array('B', val[1:]).tostring()
     print('Read returned: '),
@@ -76,42 +76,50 @@ while (1):
 time.sleep(5)
 print_w_header("Now continue to get some data from Arduino/I2C...")
 loop_ctrl = 1 if (cmdLineArgs.loop == 0) else (cmdLineArgs.loop)
+command = 1
 while (loop_ctrl):
-    val = i2c.writeByte(devAddr, 0x00, 0x01)
+    val = i2c.writeByte(devAddr, 0x00, command)
 
     #take a short break
     time.sleep(1)
 
     # read value from arduino
-    val = i2c.readBytes(devAddr, 0x00, (7*4)+3)
+    val = i2c.readBytes(devAddr, 0x00, 24+1)
     addr = val[0]
-    checksum = get_float(val[3:], 6)
-    cnt_checksum = (get_float(val[3:], 0)+
-                    get_float(val[3:], 1)+
-                    get_float(val[3:], 2)+
-                    get_float(val[3:], 3)+
-                    get_float(val[3:], 4)+
-                    get_float(val[3:], 5))/6
+    checksum = get_float(val[1:], 5)
+    cnt_checksum = (get_float(val[1:], 0)+
+                    get_float(val[1:], 1)+
+                    get_float(val[1:], 2)+
+                    get_float(val[1:], 3)+
+                    get_float(val[1:], 4))/5
 
+    print("--------COMMAND:"),
+    print(command),
+    print("--------")
     if ((round(checksum, 2) != round(cnt_checksum, 2)) or (int(cnt_checksum) == 0xFF)):
         print("FAILURE: Invalid checksum! value: "),
         print(val)
         print("checksum: "),
         print(checksum)
         #something went wrong, so sleep a little bit longer
-        time.sleep(5)
+        time.sleep(15)
+        continue
     else:
         print("SUCCESS: value: "),
-        print("%f "%get_float(val[3:], 0)),
-        print("%f "%get_float(val[3:], 1)),
-        print("%f "%get_float(val[3:], 2)),
-        print("%f "%get_float(val[3:], 3)),
-        print("%f "%get_float(val[3:], 4)),
-        print("%f "%get_float(val[3:], 5))
+        print("%f "%get_float(val[1:], 0)),
+        print("%f "%get_float(val[1:], 1)),
+        print("%f "%get_float(val[1:], 2)),
+        print("%f "%get_float(val[1:], 3)),
+        print("%f "%get_float(val[1:], 4))
         print("checksum: "),
         print(checksum)
-
     #do not update loop_ctrl if infinitive loop is chosen
     loop_ctrl -= 0 if (cmdLineArgs.loop == 0) else 1
-    time.sleep(10)
+    command = command + 1
+    if command >2:
+        command = 1
+        time.sleep(10)
+    else:
+        time.sleep(1)
+
 print 'Done!'

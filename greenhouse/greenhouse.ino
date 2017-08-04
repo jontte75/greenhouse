@@ -5,12 +5,13 @@
    - note the "state" is just state of display
 
    Help and ideas have been gathered from many sources, thanx to all!
-   Examples taken from:
+   E.g from:
    http://www.instructables.com/id/Hookup-a-16-pin-HD44780-LCD-to-an-Arduino-in-6-sec/
    http://www.instructables.com/id/Temperature-with-DS18B20/
    https://learn.adafruit.com/photocells/using-a-photocell
    http://www.instructables.com/id/Connecting-AM2320-With-Arduino/
    http://allaboutee.com/2015/01/02/esp8266-arduino-led-control-from-webpage/
+   https://github.com/lazyscheduler/AM2320
    and many other resources
 */
 
@@ -33,9 +34,7 @@ byte state = STATE_INITIAL;
 #define TEMP_POT_PIN     A0
 #define HUM_POT_PIN      A1
 #define MOIST_SENS1_PIN  A2
-#define AM_USES1         A4
-#define AM_USES2         A5
-#define LIGHTSENS_PIN    A6
+#define LIGHTSENS_PIN    A5
 
 //digital pin assignments
 #define LCDPIN1          2
@@ -43,39 +42,42 @@ byte state = STATE_INITIAL;
 #define LCDPIN3          4
 #define BTNPIN           5
 #define DALLAS_ONE_WIRE  6
-#define SERVOPIN         10
+#define SERVOPIN         7
+#define I2C_INDICATORLED 13
+#define AM_SCL           14
+#define AM_SDA           15
+
 
 //I2C related
-#define I2C_INDICATORLED  13
-#define I2C_SLAVEID       0x10
-#define I2C_CMD_HELLO     0x00
-#define I2C_CMD_GET_DATA_SET1   0x01
-#define I2C_CMD_GET_DATA_SET2   0x02
-#define I2C_CMD_TOGGLE_WATER    0x0A
-#define I2C_CMD_TOGGLE_LIGHT    0x0B
-#define I2C_INITIAL_VAL   0xFF
-#define I2C_BUFFER_SZ     0x06
-#define I2C_BUFFER2_SZ    0x03
+#define I2C_SLAVEID           0x10
+#define I2C_CMD_HELLO         0x00
+#define I2C_CMD_GET_DATA_SET1 0x01
+#define I2C_CMD_GET_DATA_SET2 0x02
+#define I2C_CMD_TOGGLE_WATER  0x0A
+#define I2C_CMD_TOGGLE_LIGHT  0x0B
+#define I2C_INITIAL_VAL       0xFF
+#define I2C_BUFFER_SZ         0x06
+#define I2C_BUFFER2_SZ        0x06
 
 // The baud rate of the serial interface
 #define SERIAL_BAUD  9600
 
-//
+// How often should we read sensors
 #define READINTERVAL (10*1000)
 
 //global variables sent outside
-float   tempSensorValue = 0;
-float   humSensorValue = 0;
+volatile float   tempSensorValue;
+volatile float   humSensorValue;
 boolean hatchOpen = false;
-uint8_t moisture = 100;
-float  tempCase = 0; //temp inside the gadget
-float  tempOutside = 0; //temp outside the greenhouse
-uint16_t lightSensValue = 0;
+volatile uint8_t moisture = 100;
+volatile float  tempCase = 0; //temp inside the gadget
+volatile float  tempOutside = 0; //temp outside the greenhouse
+volatile uint16_t lightSensValue = 0;
 
 //global internally used
 int8_t  maxC = 125, minC = -125;
-uint8_t tempLimitPotValue = 0; //these values vary, use when set
-uint8_t humLimitPotValue = 0;  //these values vary, use when set
+volatile uint8_t tempLimitPotValue = 0; //these values vary, use when set
+volatile uint8_t humLimitPotValue = 0;  //these values vary, use when set
 uint8_t buttonState = LOW;
 uint8_t alertLevel  = 30; //alert level for temp stored from tempLimitPotValue
 uint8_t humLevel    = 80; //alert level for humidy stored from humLimitPotValue
@@ -89,7 +91,11 @@ OneWire oneWire(DALLAS_ONE_WIRE);
 DallasTemperature sensors(&oneWire);
 
 //initialize the AM2320 library
-AM2320 th;
+//Note! Need to use library that supports SoftWire
+//otherwise collides with I2C between Omega and Arduino 
+//This library also supports multiple AM2320 sensors..
+//https://github.com/lazyscheduler/AM2320 
+AM2320 th(AM_SCL, AM_SDA);
 
 // Initialize the LCD library with the interface pins
 LiquidCrystal595 lcd(LCDPIN1, LCDPIN2, LCDPIN3);
@@ -103,6 +109,7 @@ volatile static float buffer2[I2C_BUFFER2_SZ]={I2C_INITIAL_VAL};
 /*---------------------setup and main loop---------------------*/
 
 void setup() {
+  tempSensorValue = humSensorValue = 0;
   SERIAL_BEGIN(SERIAL_BAUD);
   delay(500);
   LOG_DEBUGLN("\nStarting up...");
@@ -172,10 +179,6 @@ void requestEvent() {
     default:
        Wire.write(I2C_INITIAL_VAL);
   }
-  //flush
-  while(Wire.available()){
-    Wire.read();
-  }
   i2c_ongoing = 0;
   //digitalWrite(I2C_INDICATORLED, !digitalRead(I2C_INDICATORLED));
 }
@@ -202,7 +205,10 @@ void receiveEvent(int bytes)
     case I2C_CMD_GET_DATA_SET2:
       buffer2[0] = moisture;
       buffer2[1] = hatchOpen;
-      buffer2[I2C_BUFFER2_SZ-1] = (float)((buffer2[0]+buffer2[1])/2);
+      buffer2[2] = 0;
+      buffer2[3] = 0;
+      buffer2[4] = 0;   
+      buffer2[I2C_BUFFER2_SZ-1] = (float)((buffer2[0]+buffer2[1]+buffer2[2]+buffer2[3]+buffer2[4])/5);
       command = cmd;
       break;
     case I2C_CMD_TOGGLE_WATER:
@@ -213,18 +219,16 @@ void receiveEvent(int bytes)
       LOG_ERROR("Unexpected command value ");
       LOG_ERRORLN(cmd);
   }
-  //flush
-  while(Wire.available()){
-    Wire.read();
-  }
   i2c_ongoing = 1;
 }
 
 //The main loop
 void loop()
 {
+  buttonState = digitalRead(BTNPIN); // Check for button press
   lcd.setCursor(0, 0); // Set cursor to home position
   handleState();
+  delay(100);
 }
 
 
@@ -302,10 +306,10 @@ void readHumidityLimit() {
 
 void readValues(unsigned long currentMillis, bool isInitial)
 {
-  if (i2c_ongoing || (((currentMillis-lastTimeReadValues) < READINTERVAL) && !isInitial)){
+  if (state == STATE_SETUP || (((currentMillis-lastTimeReadValues) < READINTERVAL) && !isInitial)){
     return;
   }
-  LOG_ERRORLN("Reading values...");
+  LOG_DEBUGLN("Reading values...");
   lastTimeReadValues = millis();
 
   //get dallas values
@@ -331,12 +335,12 @@ void readValues(unsigned long currentMillis, bool isInitial)
   LOG_DEBUGLN(moisture);
   delay(10);
   readTemperatureLimit();
-  LOG_DEBUG2("tp:");
-  LOG_DEBUGLN2(tempLimitPotValue);
+  LOG_DEBUG("tp:");
+  LOG_DEBUGLN(tempLimitPotValue);
   delay(10);
   readHumidityLimit();
-  LOG_DEBUG2("hp:");
-  LOG_DEBUGLN2(humLimitPotValue);
+  LOG_DEBUG("hp:");
+  LOG_DEBUGLN(humLimitPotValue);
 
   float tempCaseTemp = sensors.getTempCByIndex(0);
   float tempOutsTemp = sensors.getTempCByIndex(1);
@@ -354,8 +358,6 @@ void readValues(unsigned long currentMillis, bool isInitial)
   lightSensValue = analogRead(LIGHTSENS_PIN);
   LOG_DEBUG("LDR:");
   LOG_DEBUGLN(lightSensValue);
-
-  buttonState = digitalRead(BTNPIN); // Check for button press
 }
 
 void turnServo(uint16_t degree)
@@ -368,7 +370,6 @@ void turnServo(uint16_t degree)
 
 void stateWorking()
 {
-
   writeTempAndHumToLcd();
 
   if (!hatchOpen && (tempSensorValue >= alertLevel || ( humSensorValue >= humLevel && tempSensorValue >= 20))) {
