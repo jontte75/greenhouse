@@ -9,6 +9,9 @@ This is an attempt to tackle memory issues and instablility of the Arduino
 
 ## Python
 
-This directory contains different python scripts. In the beginning it'll 
-most likely contain scripts for testing purposes, not yet connected to 
-Arduino or the greenhouse project.  
+This directory contains different python scripts.
+
+## i2ctest
+
+This directory contains different i2c related test scripts and other code. 
+Look file history, since these are just testing material, so...
