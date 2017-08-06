@@ -76,13 +76,13 @@ volatile uint16_t lightSensValue = 0;
 
 //global internally used
 int8_t  maxC = 125, minC = -125;
-volatile uint8_t tempLimitPotValue = 0; //these values vary, use when set
-volatile uint8_t humLimitPotValue = 0;  //these values vary, use when set
+uint8_t tempLimitPotValue = 0; //these values vary, use when set
+uint8_t humLimitPotValue = 0;  //these values vary, use when set
 uint8_t buttonState = LOW;
 uint8_t alertLevel  = 30; //alert level for temp stored from tempLimitPotValue
 uint8_t humLevel    = 80; //alert level for humidy stored from humLimitPotValue
 uint8_t updateValuesCntr = 0;
-unsigned long lastTimeReadValues = 0;
+volatile unsigned long lastTimeReadValues = 0;
 
 // Setup a oneWire instance to communicate with any OneWire devices
 OneWire oneWire(DALLAS_ONE_WIRE);
@@ -142,6 +142,7 @@ void setup() {
 
   //read values, especially potentiometer values, incase of restart
   readValues(0,true);
+  readConfigSensors();
   alertLevel = tempLimitPotValue;
   humLevel = humLimitPotValue;
 
@@ -231,6 +232,18 @@ void loop()
   delay(100);
 }
 
+void readConfigSensors()
+{
+  delay(10);
+  readTemperatureLimit();
+  LOG_DEBUG("tp:");
+  LOG_DEBUGLN(tempLimitPotValue);
+  delay(10);
+  readHumidityLimit();
+  LOG_DEBUG("hp:");
+  LOG_DEBUGLN(humLimitPotValue);
+
+}
 
 void handleState()
 {
@@ -255,8 +268,7 @@ void handleState()
 
   if (state == STATE_SETUP) {
     stateSetup();
-  }
-  if (state == STATE_WORKING || state == STATE_INITIAL) {
+  }else{
     stateWorking();
   }
 }
@@ -304,9 +316,9 @@ void readHumidityLimit() {
   humLimitPotValue = map(tempAnalogReadVal, 0, 1023, 20, 100); // Map the values from 20 to 100%
 }
 
-void readValues(unsigned long currentMillis, bool isInitial)
+void readValues(unsigned long currentMillis, bool forced)
 {
-  if (state == STATE_SETUP || (((currentMillis-lastTimeReadValues) < READINTERVAL) && !isInitial)){
+  if (state == STATE_SETUP || (((currentMillis-lastTimeReadValues) < READINTERVAL) && !forced)){
     return;
   }
   LOG_DEBUGLN("Reading values...");
@@ -334,13 +346,6 @@ void readValues(unsigned long currentMillis, bool isInitial)
   LOG_DEBUG("SOIL: ");
   LOG_DEBUGLN(moisture);
   delay(10);
-  readTemperatureLimit();
-  LOG_DEBUG("tp:");
-  LOG_DEBUGLN(tempLimitPotValue);
-  delay(10);
-  readHumidityLimit();
-  LOG_DEBUG("hp:");
-  LOG_DEBUGLN(humLimitPotValue);
 
   float tempCaseTemp = sensors.getTempCByIndex(0);
   float tempOutsTemp = sensors.getTempCByIndex(1);
@@ -422,6 +427,7 @@ void writeTempAndHumToLcd() {
 }
 
 void displaySetup() {
+  readConfigSensors();
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print("T:");
