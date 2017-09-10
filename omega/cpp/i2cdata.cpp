@@ -17,9 +17,13 @@
  */
 #include "i2cdata.h"
 
-I2cData::I2cData(){
-    address = 0;
-    checksum = 0.0;
+namespace i2cd{
+
+I2cData::I2cData():_index(1), address(0), checksum(0){
+    values.fill(0.0);
+}
+
+I2cData::I2cData(uint8_t ind):_index(ind), address(0), checksum(0){
     values.fill(0.0);
 }
 
@@ -75,11 +79,12 @@ bool I2cData::setData(const uint8_t* data, int _sz){
     return result;
 }
 
-std::ostream &operator<<( std::ostream &output, const I2cData &data ) { 
+std::ostream &operator<<( std::ostream &output, const I2cData &data ) {
+    int ind = data._index;
     for(const auto& val: data.values){
-        output << val << " ";
+        output << "&field"<< ind << "=" << val;
+        ind++;
     }
-    output << "checksum: " << data.checksum;
-    output << " addr: " << (unsigned int)data.address;
     return output;            
  }
+}//namespace

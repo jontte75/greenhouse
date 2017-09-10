@@ -7,9 +7,7 @@
 #include <cmath>
 #include "onion-i2c.h"
 
-#define I2C_CMD_HELLO         0x00
-#define I2C_CMD_GET_DATA_SET1 0x01
-#define I2C_CMD_GET_DATA_SET2 0x02
+namespace i2cc{
 
 class I2cCom{
 private:
@@ -19,10 +17,16 @@ private:
     int     addr;
     bool    connected;
 public:
+    static const uint8_t I2C_CMD_HELLO         = 0x00;
+    static const uint8_t I2C_CMD_GET_DATA_SET1 = 0x01;
+    static const uint8_t I2C_CMD_GET_DATA_SET2 = 0x02;
+    static const uint8_t I2C_CMD_MAX           = 0x03;
+    static const uint8_t I2C_DEF_BYTES         = 25;
     I2cCom();
     ~I2cCom() {};
     bool connect();
     bool storeDataFromI2c(uint8_t cmd);
     const uint8_t* getData();
 };
+} //namespace
 #endif

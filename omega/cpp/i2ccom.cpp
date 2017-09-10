@@ -17,6 +17,8 @@
  */
 #include "i2ccom.h"
 
+namespace i2cc{
+
 I2cCom::I2cCom():devAddr(0),devNum(0x10),addr(0),connected(false){
     memset(buffer, 0, sizeof(buffer));
 }
@@ -67,3 +69,4 @@ bool I2cCom::storeDataFromI2c(uint8_t cmd){
 const uint8_t* I2cCom::getData(){
     return &buffer[0];
 }
+}//namespace

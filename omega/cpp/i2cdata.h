@@ -7,6 +7,8 @@
 #include <array>
 #include "onion-i2c.h"
 
+namespace i2cd{
+
 #define I2C_MIN_SZ          9 //1+4+4 (addr+value+checksum)
 #define I2C_DATA_ARRAY_SZ   5
 
@@ -20,6 +22,7 @@
 // +++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 class I2cData{
 private:
+    uint8_t _index;
     uint8_t address;
     std::array<float, I2C_DATA_ARRAY_SZ> values;
     float   checksum;
@@ -28,10 +31,11 @@ private:
     bool validate();
 public:
     I2cData();
+    I2cData(uint8_t ind);
     ~I2cData() {};
     bool setData(const uint8_t* data, int sz=I2C_BUFFER_SIZE);
     friend std::ostream &operator<<( std::ostream &output, const I2cData &data );
 };
 
-
+} //namespace
 #endif
