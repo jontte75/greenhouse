@@ -15,3 +15,7 @@ This directory contains different python scripts.
 
 This directory contains different i2c related test scripts and other code. 
 Look file history, since these are just testing material, so...
+
+## cpp
+
+This directory contains processes made with C++
