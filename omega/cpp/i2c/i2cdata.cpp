@@ -64,7 +64,7 @@ bool I2cData::setData(const uint8_t* data, int _sz){
     }
     
     address = data[dataInd++];
-    while(dataInd < (_sz - sizeof(float))){
+    while(dataInd < (int)(_sz - sizeof(float))){
         values[valInd++]=bytesToFloat(&data[dataInd],&dataInd);
     }
     checksum = bytesToFloat(&data[(_sz-sizeof(float))]);

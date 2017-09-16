@@ -19,7 +19,7 @@
 
 namespace i2cc{
 
-I2cCom::I2cCom():devAddr(0),devNum(0x10),addr(0),connected(false){
+I2cCom::I2cCom():devNum(0x10), devAddr(0), addr(0), connected(false){
     memset(buffer, 0, sizeof(buffer));
 }
 
@@ -29,10 +29,10 @@ bool I2cCom::connect(){
     buffer[0] = I2C_CMD_HELLO;
     uint8_t retries=5;
     while(retries){
-        int res=i2c_writeBuffer (devAddr, devNum, addr, &buffer[0], 0x01);
+        (void)i2c_writeBuffer (devAddr, devNum, addr, &buffer[0], 0x01);
         sleep(1);
         memset(buffer, 0, sizeof(buffer));
-        res = i2c_read (devAddr, devNum, addr, &buffer[0], helloMsg.size()+1);
+        (void)i2c_read (devAddr, devNum, addr, &buffer[0], helloMsg.size()+1);
         if (strncmp(helloMsg.c_str(), (char*)&buffer[1], helloMsg.size()) == 0){
             std::cout<<"YES! connection to Arduino succeeded"<<std::endl;
             connected = true;
@@ -48,7 +48,7 @@ bool I2cCom::connect(){
             retries--;
         }
     }
-
+    return connected;
 }
 
 // This function checks connection with Hello and sets connection status
@@ -56,7 +56,7 @@ bool I2cCom::storeDataFromI2c(uint8_t cmd){
     buffer[0] = cmd;
     bool result = true;
     if(connected){
-        int res=i2c_writeBuffer (devAddr, devNum, addr, &buffer[0], 0x01);
+        (void)i2c_writeBuffer (devAddr, devNum, addr, &buffer[0], 0x01);
         sleep(2);
         memset(buffer, 0, sizeof(buffer));
         if ( 0 != i2c_read (0x00, 0x10, 0x00, &buffer[0], 25)){

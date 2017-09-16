@@ -20,7 +20,6 @@ Main module. Starts two threads. One thread communicates with arduino and the ot
 ### Compilation
 One need proper cros-compilation tool-chain (for omega2), or easiest way is to use dockerised compilation environment, like jlcs/omega2-docker-built.
 
-There will be a Makefile, but for now...
 ```bash
 $CXX $CFLAGS -std=gnu++11 $LDFLAGS -loniondebug -lonioni2c main.cpp i2cdata.cpp i2ccom.cpp tsclient.cpp -o i2ctest
 ```
@@ -33,6 +32,9 @@ CFLAGS=-I/lede/staging_dir/target-mipsel_24kc_musl/usr/include -I/home/omega/wor
 
 CXX=/lede/staging_dir/toolchain-mipsel_24kc_gcc-5.4.0_musl/bin/mipsel-openwrt-linux-g++
 ```
+
+Or use the Makefile. Edit the correct paths to libraries and compiler.
+
 ### Usage
 Start process by hand, or preferably make it to start automatically when Omega boots.
 

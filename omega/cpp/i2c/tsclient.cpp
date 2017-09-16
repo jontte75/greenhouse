@@ -9,9 +9,8 @@
 #include "tsclient.h"
 namespace tsc
 {
-    tsClient::tsClient(std::string apikey):sock(-1), port(0), address("")
+    tsClient::tsClient(std::string apikey):sock(-1), address(""), tskey(apikey), port(0)
     {
-        tskey = apikey;
     }
 
     tsClient::~tsClient()
