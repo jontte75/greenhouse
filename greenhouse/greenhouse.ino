@@ -22,7 +22,7 @@
 #include <avr/pgmspace.h>
 #include <Wire.h>
 #include <AM2320.h>
-#include "./greenhouse_log.h"
+#include "./log.h"
 
 //state handling
 #define STATE_INITIAL   0
@@ -43,24 +43,14 @@ byte state = STATE_INITIAL;
 #define BTNPIN           5
 #define DALLAS_ONE_WIRE  6
 #define SERVOPIN         7
-#define I2C_INDICATORLED 13
+#define LOG_RX           10
+#define LOG_TX           11 
 #define AM_SCL           14
 #define AM_SDA           15
 
-
-//I2C related
-#define I2C_SLAVEID           0x10
-#define I2C_CMD_HELLO         0x00
-#define I2C_CMD_GET_DATA_SET1 0x01
-#define I2C_CMD_GET_DATA_SET2 0x02
-#define I2C_CMD_TOGGLE_WATER  0x0A
-#define I2C_CMD_TOGGLE_LIGHT  0x0B
-#define I2C_INITIAL_VAL       0xFF
-#define I2C_BUFFER_SZ         0x06
-#define I2C_BUFFER2_SZ        0x06
-
 // The baud rate of the serial interface
 #define SERIAL_BAUD  9600
+#define LOGGER_BAUD  9600
 
 // How often should we read sensors
 #define READINTERVAL (10*1000)
@@ -92,7 +82,7 @@ DallasTemperature sensors(&oneWire);
 
 //initialize the AM2320 library
 //Note! Need to use library that supports SoftWire
-//otherwise collides with I2C between Omega and Arduino 
+//otherwise collides with other I2C 
 //This library also supports multiple AM2320 sensors..
 //https://github.com/lazyscheduler/AM2320 
 AM2320 th(AM_SCL, AM_SDA);
@@ -102,25 +92,19 @@ LiquidCrystal595 lcd(LCDPIN1, LCDPIN2, LCDPIN3);
 Servo servo1; // Create a servo object
 
 // Some global variables
-volatile byte command = I2C_INITIAL_VAL;
-volatile uint8_t i2c_ongoing = 0;
-volatile static float buffer[I2C_BUFFER_SZ]={I2C_INITIAL_VAL};
-volatile static float buffer2[I2C_BUFFER2_SZ]={I2C_INITIAL_VAL};
+volatile byte command = 0;
+
+Log logger(Serial, LOGGER_BAUD, LOG_DEBUG);
+
 /*---------------------setup and main loop---------------------*/
 
 void setup() {
   tempSensorValue = humSensorValue = 0;
-  SERIAL_BEGIN(SERIAL_BAUD);
+  Serial.begin(SERIAL_BAUD);
+
   delay(500);
-  LOG_DEBUGLN("\nStarting up...");
+  DEBUG(logger, "Starting up...\n");
   lcd.begin(16, 2); // Set the display to 16 columns and 2 rows
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Set up I2C.");
-  Wire.begin(I2C_SLAVEID);
-  Wire.onRequest(requestEvent);
-  Wire.onReceive(receiveEvent);
-  delay(2000);
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print("Set up servo.");
@@ -130,7 +114,6 @@ void setup() {
   pinMode(BTNPIN, INPUT);
 
   pinMode(MOIST_SENS1_PIN, INPUT);
-  pinMode(I2C_INDICATORLED, OUTPUT);
 
   // Initialize the library for temperature sensors
   delay(300);
@@ -165,64 +148,6 @@ SIGNAL(TIMER0_COMPA_vect)
   readValues(currentMillis, false);
 }
 
-//Request Event callback function, will be called when master reads from I2C bus
-void requestEvent() {
-  switch (command){
-    case I2C_CMD_HELLO:
-      Wire.write("Hello!");
-      break;
-    case I2C_CMD_GET_DATA_SET1:
-      Wire.write((byte*)&buffer[0], sizeof(buffer));
-      break;
-    case I2C_CMD_GET_DATA_SET2:
-      Wire.write((byte*)&buffer2[0], sizeof(buffer2));
-      break;
-    default:
-       Wire.write(I2C_INITIAL_VAL);
-  }
-  i2c_ongoing = 0;
-  //digitalWrite(I2C_INDICATORLED, !digitalRead(I2C_INDICATORLED));
-}
-
-// Receive Event callback, called when master writes data to I2C bus
-void receiveEvent(int bytes)
-{
-  //digitalWrite(I2C_INDICATORLED, !digitalRead(I2C_INDICATORLED));
-  (void)Wire.read();//address
-  byte cmd = Wire.read();
-  switch (cmd) {
-    case I2C_CMD_HELLO:
-      command = cmd;
-      break;
-    case I2C_CMD_GET_DATA_SET1:
-      buffer[0] = tempSensorValue;
-      buffer[1] = humSensorValue;
-      buffer[2] = tempCase;
-      buffer[3] = tempOutside;
-      buffer[4] = lightSensValue;
-      buffer[I2C_BUFFER_SZ-1] = (float)((buffer[0]+buffer[1]+buffer[2]+buffer[3]+buffer[4])/5);
-      command = cmd;
-      break;
-    case I2C_CMD_GET_DATA_SET2:
-      buffer2[0] = moisture;
-      buffer2[1] = hatchOpen;
-      buffer2[2] = 0;
-      buffer2[3] = 0;
-      buffer2[4] = 0;   
-      buffer2[I2C_BUFFER2_SZ-1] = (float)((buffer2[0]+buffer2[1]+buffer2[2]+buffer2[3]+buffer2[4])/5);
-      command = cmd;
-      break;
-    case I2C_CMD_TOGGLE_WATER:
-    case I2C_CMD_TOGGLE_LIGHT:
-      command = I2C_INITIAL_VAL;
-      break;
-    default:
-      LOG_ERROR("Unexpected command value ");
-      LOG_ERRORLN(cmd);
-  }
-  i2c_ongoing = 1;
-}
-
 //The main loop
 void loop()
 {
@@ -236,20 +161,16 @@ void readConfigSensors()
 {
   delay(10);
   readTemperatureLimit();
-  LOG_DEBUG("tp:");
-  LOG_DEBUGLN(tempLimitPotValue);
+  DEBUG(logger,"tempLimit: " << tempLimitPotValue << "\n");
   delay(10);
   readHumidityLimit();
-  LOG_DEBUG("hp:");
-  LOG_DEBUGLN(humLimitPotValue);
-
+  DEBUG(logger,"humLimit: "<< humLimitPotValue << "\n");
 }
 
 void handleState()
 {
   if (buttonState == HIGH) {
-    LOG_DEBUG("button pressed, state is");
-    LOG_DEBUGLN(state);
+    DEBUG(logger,"button pressed, state is" << state << "\n");
     if (state == STATE_INITIAL || state == STATE_WORKING) {
       state = STATE_SETUP;
       lcd.setLED2Pin(LOW);
@@ -274,19 +195,20 @@ void handleState()
 }
 
 bool read_from_am2320() {
+  bool retVal = true;
   switch (th.Read()) {
     case 2:
-      LOG_ERRORLN("CRC failed");
-      return false;
+      ERROR(logger,"CRC failed" << "\n");
+      retVal = false;
       break;
     case 1:
-      LOG_ERRORLN("Sensor offline");
-      return false;
+      ERROR(logger,"Sensor offline" << "\n");
+      retVal = false;
       break;
     default:
       break;
   }
-  return true;
+  return retVal;
 }
 
 void readSoilMoisture() {
@@ -294,7 +216,7 @@ void readSoilMoisture() {
   tempAnalogValue = analogRead(MOIST_SENS1_PIN);
   delay(10);
   tempAnalogValue = analogRead(MOIST_SENS1_PIN);
-  LOG_DEBUGLN(tempAnalogValue);
+  DEBUG(logger, "moist: " << tempAnalogValue << "\n");
   moisture = uint8_t(100 * (1 - ((double)(tempAnalogValue) / 1023)));
 }
 
@@ -321,7 +243,7 @@ void readValues(unsigned long currentMillis, bool forced)
   if (state == STATE_SETUP || (((currentMillis-lastTimeReadValues) < READINTERVAL) && !forced)){
     return;
   }
-  LOG_DEBUGLN("Reading values...");
+  DEBUG(logger, "Reading values...\n");
   lastTimeReadValues = millis();
 
   //get dallas values
@@ -329,40 +251,34 @@ void readValues(unsigned long currentMillis, bool forced)
 
   if (true == read_from_am2320()) {
     if (isnan(th.h) || isnan(th.t)) {
-      LOG_ERRORLN("Invalid values from AM2320");
+      ERROR(logger, "Invalid values from AM2320\n");
     } else {
       humSensorValue = th.h;
       tempSensorValue = th.t;
     }
   } else {
-    LOG_ERROR("Failed to get values from AM2320");
+    ERROR(logger, "Failed to get values from AM2320\n");
   }
-  LOG_DEBUG("HUM: ");
-  LOG_DEBUGLN(humSensorValue);
-  LOG_DEBUG("TEMP: ");
-  LOG_DEBUGLN(tempSensorValue);
+  DEBUG(logger, "HUM: " << humSensorValue << "\n");
+  DEBUG(logger, "TEMP: "<< tempSensorValue << "\n");
 
   readSoilMoisture();
-  LOG_DEBUG("SOIL: ");
-  LOG_DEBUGLN(moisture);
+  DEBUG(logger, "SOIL: " << moisture << "\n");
   delay(10);
 
   float tempCaseTemp = sensors.getTempCByIndex(0);
   float tempOutsTemp = sensors.getTempCByIndex(1);
   if (isnan(tempCaseTemp) || isnan(tempOutsTemp)) {
-    LOG_DEBUGLN("Could not get dallas temperature");
+    ERROR(logger, "Could not get dallas temperature\n");
   } else {
     tempCase = tempCaseTemp;
     tempOutside = tempOutsTemp;
   }
-  LOG_DEBUG("to:");
-  LOG_DEBUGLN(tempOutsTemp);
-  LOG_DEBUG("tc:");
-  LOG_DEBUGLN(tempCaseTemp);
+  DEBUG(logger,"tempOut: "<< tempOutsTemp << "\n");
+  DEBUG(logger,"tempCase: "<< tempCaseTemp << "\n");
 
   lightSensValue = analogRead(LIGHTSENS_PIN);
-  LOG_DEBUG("LDR:");
-  LOG_DEBUGLN(lightSensValue);
+  DEBUG(logger, "LightSensor: "<< lightSensValue << "\n");
 }
 
 void turnServo(uint16_t degree)
@@ -378,18 +294,12 @@ void stateWorking()
   writeTempAndHumToLcd();
 
   if (!hatchOpen && (tempSensorValue >= alertLevel || ( humSensorValue >= humLevel && tempSensorValue >= 20))) {
-    LOG_DEBUG2("Alert! over ");
-    LOG_DEBUG2(alertLevel);
-    LOG_DEBUG2("degrees, open hatch\n");
+    INFO(logger, "Alert! over " << alertLevel << "degrees, open hatch\n");
     turnServo(90);
     hatchOpen = true;
   }
   if (hatchOpen && ((tempSensorValue <= (alertLevel - 2) && humSensorValue <= (humLevel - 2)) || tempSensorValue <= 20)) {
-    LOG_DEBUG2("Alert! less than ");
-    LOG_DEBUG2(alertLevel);
-    LOG_DEBUG2("(");
-    LOG_DEBUG2(tempSensorValue);
-    LOG_DEBUG2(") degrees, close hatch\n");
+    INFO(logger, "Alert! less than " << alertLevel << "(" << tempSensorValue <<") degrees, close hatch\n");
     turnServo(180);
     hatchOpen = false;
   }
