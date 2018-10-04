@@ -94,7 +94,9 @@ Servo servo1; // Create a servo object
 // Some global variables
 volatile byte command = 0;
 
-Log logger(Serial, LOGGER_BAUD, LOG_DEBUG);
+Log logger(Serial1, LOGGER_BAUD, LOG_ERROR);
+
+template<class T> inline Print &operator <<(Print &obj, T arg) { obj.print(arg); return obj; }
 
 /*---------------------setup and main loop---------------------*/
 
@@ -154,6 +156,22 @@ void loop()
   buttonState = digitalRead(BTNPIN); // Check for button press
   lcd.setCursor(0, 0); // Set cursor to home position
   handleState();
+  char serIn; 
+  if (Serial.available()>0){
+    serIn = Serial.read();
+    if (serIn == 'h'){
+      Serial<<"Hello world"<<"\n";
+    }else if (serIn == 'g'){
+      Serial <<tempSensorValue << ":" 
+             << humSensorValue << ":"
+             << tempCase << ":"
+             << tempOutside << ":"
+             <<  lightSensValue << ":"
+             << moisture << ":"
+             << (hatchOpen?1:0) << "\n";
+    }
+    while (Serial.available()>0) serIn=Serial.read();
+  }
   delay(100);
 }
 
