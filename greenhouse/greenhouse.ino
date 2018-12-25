@@ -2,7 +2,6 @@
    Greenhouse-project
    - monitor temperature and humidity. If temperature rises too high (or humidity), then open the window
    - monitor also soil humidity
-   - note the "state" is just state of display
 
    Help and ideas have been gathered from many sources, thanx to all!
    E.g from:
@@ -23,12 +22,6 @@
 #include <Wire.h>
 #include <AM2320.h>
 #include "./log.h"
-
-//state handling
-#define STATE_INITIAL   0
-#define STATE_WORKING   1
-#define STATE_SETUP     2
-byte state = STATE_INITIAL;
 
 //analog pin assignments
 #define TEMP_POT_PIN     A0
@@ -99,117 +92,82 @@ Log logger(Serial1, LOGGER_BAUD, LOG_ERROR);
 template<class T> inline Print &operator <<(Print &obj, T arg) { obj.print(arg); return obj; }
 
 /*---------------------setup and main loop---------------------*/
+void setup()
+{
+    tempSensorValue = humSensorValue = 0;
+    Serial.begin(SERIAL_BAUD);
 
-void setup() {
-  tempSensorValue = humSensorValue = 0;
-  Serial.begin(SERIAL_BAUD);
+    delay(500);
+    DEBUG(logger, "Starting up...\n");
+    lcd.begin(16, 2); // Set the display to 16 columns and 2 rows
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Set up servo.");
+    turnServo(180);
 
-  delay(500);
-  DEBUG(logger, "Starting up...\n");
-  lcd.begin(16, 2); // Set the display to 16 columns and 2 rows
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Set up servo.");
-  turnServo(180);
-  
-  analogReference(DEFAULT);
-  pinMode(BTNPIN, INPUT);
+    analogReference(DEFAULT);
+    pinMode(BTNPIN, INPUT);
 
-  pinMode(MOIST_SENS1_PIN, INPUT);
+    pinMode(MOIST_SENS1_PIN, INPUT);
 
-  // Initialize the library for temperature sensors
-  delay(300);
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Set up sensors.");
-  sensors.begin();
-  delay(100);
+    // Initialize the library for temperature sensors
+    delay(300);
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Set up sensors.");
+    sensors.begin();
+    delay(100);
 
-  //read values, especially potentiometer values, incase of restart
-  readValues(0,true);
-  readConfigSensors();
-  alertLevel = tempLimitPotValue;
-  humLevel = humLimitPotValue;
+    //read values, especially potentiometer values, incase of restart
+    readValues(0, true);
+    alertLevel = tempLimitPotValue;
+    humLevel = humLimitPotValue;
 
-  state = STATE_INITIAL;
-
-  // Timer0 is already used for millis() - we'll just interrupt somewhere
-  // in the middle and call the "Compare A" function below
-  OCR0A = 0xAF;
-  TIMSK0 |= _BV(OCIE0A);
-  delay(300);
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Setups done.");
-  delay(3000);
+    // Timer0 is already used for millis() - we'll just interrupt somewhere
+    // in the middle and call the "Compare A" function below
+    OCR0A = 0xAF;
+    TIMSK0 |= _BV(OCIE0A);
+    delay(300);
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Setups done.");
+    delay(3000);
 }
 
 SIGNAL(TIMER0_COMPA_vect)
 {
-  unsigned long currentMillis = millis();
-  readValues(currentMillis, false);
+    unsigned long currentMillis = millis();
+    readValues(currentMillis, false);
 }
 
 //The main loop
 void loop()
 {
-  buttonState = digitalRead(BTNPIN); // Check for button press
-  lcd.setCursor(0, 0); // Set cursor to home position
-  handleState();
-  char serIn; 
-  if (Serial.available()>0){
-    serIn = Serial.read();
-    if (serIn == 'h'){
-      Serial<<"Hello world"<<"\n";
-    }else if (serIn == 'g'){
-      Serial <<tempSensorValue << ":" 
-             << humSensorValue << ":"
-             << tempCase << ":"
-             << tempOutside << ":"
-             <<  lightSensValue << ":"
-             << moisture << ":"
-             << (hatchOpen?1:0) << "\n";
-    }
-    while (Serial.available()>0) serIn=Serial.read();
-  }
-  delay(100);
+    lcd.setCursor(0, 0); // Set cursor to home position
+    writeTempAndHumToLcd();
+    handleWindow();
+    handleSerialCommunication();
+    delay(100);
 }
 
-void readConfigSensors()
-{
-  delay(10);
-  readTemperatureLimit();
-  DEBUG(logger,"tempLimit: " << tempLimitPotValue << "\n");
-  delay(10);
-  readHumidityLimit();
-  DEBUG(logger,"humLimit: "<< humLimitPotValue << "\n");
-}
-
-void handleState()
-{
-  if (buttonState == HIGH) {
-    DEBUG(logger,"button pressed, state is" << state << "\n");
-    if (state == STATE_INITIAL || state == STATE_WORKING) {
-      state = STATE_SETUP;
-      lcd.setLED2Pin(LOW);
-      lcd.setLED1Pin(LOW);
-      lcd.print("");
+void handleSerialCommunication(){
+    while (Serial.available() > 0) {
+        String str = Serial.readString();
+        if (str.substring(0) == "hello\r\n") {
+            Serial << "Hello world"
+                   << "\r\n";
+        } else if (str.substring(0) == "get\r\n") {
+            Serial << tempSensorValue << ":"
+                   << humSensorValue << ":"
+                   << tempCase << ":"
+                   << tempOutside << ":"
+                   << lightSensValue << ":"
+                   << moisture << ":"
+                   << (hatchOpen ? 1 : 0) << "\r\n";
+        } else {
+            Serial << "unknown command:" << str << "\r\n";
+        }
     }
-    else {
-      lcd.setLED2Pin(HIGH);
-      lcd.setLED1Pin(HIGH);
-      lcd.print("");
-      state = STATE_WORKING;
-      alertLevel = tempLimitPotValue;
-      humLevel = humLimitPotValue;
-    }
-  }
-
-  if (state == STATE_SETUP) {
-    stateSetup();
-  }else{
-    stateWorking();
-  }
 }
 
 bool read_from_am2320() {
@@ -229,150 +187,145 @@ bool read_from_am2320() {
   return retVal;
 }
 
-void readSoilMoisture() {
-  uint16_t tempAnalogValue = 0;
-  tempAnalogValue = analogRead(MOIST_SENS1_PIN);
-  delay(10);
-  tempAnalogValue = analogRead(MOIST_SENS1_PIN);
-  DEBUG(logger, "moist: " << tempAnalogValue << "\n");
-  moisture = uint8_t(100 * (1 - ((double)(tempAnalogValue) / 1023)));
+void readSoilMoisture()
+{
+    uint16_t tempAnalogValue = 0;
+    tempAnalogValue = analogRead(MOIST_SENS1_PIN);
+    delay(10);
+    tempAnalogValue = analogRead(MOIST_SENS1_PIN);
+    DEBUG(logger, "moist: " << tempAnalogValue << "\n");
+    moisture = uint8_t(100 * (1 - ((double)(tempAnalogValue) / 1023)));
 }
 
-void readTemperatureLimit() {
-  uint16_t tempAnalogReadVal = 0;
-  //read twice because of reading issues (sometimes)
-  tempAnalogReadVal = analogRead(TEMP_POT_PIN); // Read the pot value
-  delay(10);
-  tempAnalogReadVal = analogRead(TEMP_POT_PIN); // Read the pot value
-  tempLimitPotValue = map(tempAnalogReadVal, 0, 1023, 10, 100); // Map the values from 10 to 100 degrees
+void readTemperatureLimit()
+{
+    uint16_t tempAnalogReadVal = 0;
+    //read twice because of reading issues (sometimes)
+    tempAnalogReadVal = analogRead(TEMP_POT_PIN); // Read the pot value
+    delay(10);
+    tempAnalogReadVal = analogRead(TEMP_POT_PIN);                 // Read the pot value
+    tempLimitPotValue = map(tempAnalogReadVal, 0, 1023, 10, 100); // Map the values from 10 to 100 degrees
 }
 
-void readHumidityLimit() {
-  uint16_t tempAnalogReadVal = 0; 
-  //read twice because of reading issues (sometimes)
-  tempAnalogReadVal = analogRead(HUM_POT_PIN); // Read the pot value
-  delay(10);
-  tempAnalogReadVal = analogRead(HUM_POT_PIN); // Read the pot value
-  humLimitPotValue = map(tempAnalogReadVal, 0, 1023, 20, 100); // Map the values from 20 to 100%
+void readHumidityLimit()
+{
+    uint16_t tempAnalogReadVal = 0;
+    //read twice because of reading issues (sometimes)
+    tempAnalogReadVal = analogRead(HUM_POT_PIN); // Read the pot value
+    delay(10);
+    tempAnalogReadVal = analogRead(HUM_POT_PIN);                 // Read the pot value
+    humLimitPotValue = map(tempAnalogReadVal, 0, 1023, 20, 100); // Map the values from 20 to 100%
 }
 
 void readValues(unsigned long currentMillis, bool forced)
 {
-  if (state == STATE_SETUP || (((currentMillis-lastTimeReadValues) < READINTERVAL) && !forced)){
-    return;
-  }
-  DEBUG(logger, "Reading values...\n");
-  lastTimeReadValues = millis();
-
-  //get dallas values
-  sensors.requestTemperatures();
-
-  if (true == read_from_am2320()) {
-    if (isnan(th.h) || isnan(th.t)) {
-      ERROR(logger, "Invalid values from AM2320\n");
-    } else {
-      humSensorValue = th.h;
-      tempSensorValue = th.t;
+    if ((((currentMillis - lastTimeReadValues) < READINTERVAL) && !forced)) {
+        return;
     }
-  } else {
-    ERROR(logger, "Failed to get values from AM2320\n");
-  }
-  DEBUG(logger, "HUM: " << humSensorValue << "\n");
-  DEBUG(logger, "TEMP: "<< tempSensorValue << "\n");
 
-  readSoilMoisture();
-  DEBUG(logger, "SOIL: " << moisture << "\n");
-  delay(10);
+    DEBUG(logger, "Reading values...\n");
+    lastTimeReadValues = millis();
 
-  float tempCaseTemp = sensors.getTempCByIndex(0);
-  float tempOutsTemp = sensors.getTempCByIndex(1);
-  if (isnan(tempCaseTemp) || isnan(tempOutsTemp)) {
-    ERROR(logger, "Could not get dallas temperature\n");
-  } else {
-    tempCase = tempCaseTemp;
-    tempOutside = tempOutsTemp;
-  }
-  DEBUG(logger,"tempOut: "<< tempOutsTemp << "\n");
-  DEBUG(logger,"tempCase: "<< tempCaseTemp << "\n");
+    //get dallas values
+    sensors.requestTemperatures();
 
-  lightSensValue = analogRead(LIGHTSENS_PIN);
-  DEBUG(logger, "LightSensor: "<< lightSensValue << "\n");
+    if (true == read_from_am2320()) {
+        if (isnan(th.h) || isnan(th.t)) {
+            ERROR(logger, "Invalid values from AM2320\n");
+        } else {
+            humSensorValue = th.h;
+            tempSensorValue = th.t;
+        }
+    } else {
+        ERROR(logger, "Failed to get values from AM2320\n");
+    }
+    DEBUG(logger, "HUM: " << humSensorValue << "\n");
+    DEBUG(logger, "TEMP: " << tempSensorValue << "\n");
+
+    readSoilMoisture();
+    DEBUG(logger, "SOIL: " << moisture << "\n");
+    delay(10);
+
+    float tempCaseTemp = sensors.getTempCByIndex(0);
+    float tempOutsTemp = sensors.getTempCByIndex(1);
+    if (isnan(tempCaseTemp) || isnan(tempOutsTemp)) {
+        ERROR(logger, "Could not get dallas temperature\n");
+    } else {
+        tempCase = tempCaseTemp;
+        tempOutside = tempOutsTemp;
+    }
+    DEBUG(logger, "tempOut: " << tempOutsTemp << "\n");
+    DEBUG(logger, "tempCase: " << tempCaseTemp << "\n");
+
+    lightSensValue = analogRead(LIGHTSENS_PIN);
+    DEBUG(logger, "LightSensor: " << lightSensValue << "\n");
 }
 
 void turnServo(uint16_t degree)
 {
-  servo1.attach(SERVOPIN); // Attaches the servo on pin 14 to the servo1 object
-  servo1.write(degree);  // Put servo1 at home position
-  delay(3000);
-  servo1.detach();  //detach not to disturb SoftwareSerial
+    servo1.attach(SERVOPIN); // Attaches the servo on pin 14 to the servo1 object
+    servo1.write(degree); // Put servo1 at home position
+    delay(3000);
+    servo1.detach(); //detach not to disturb SoftwareSerial
 }
 
-void stateWorking()
+void handleWindow()
 {
-  writeTempAndHumToLcd();
-
-  if (!hatchOpen && (tempSensorValue >= alertLevel || ( humSensorValue >= humLevel && tempSensorValue >= 20))) {
-    INFO(logger, "Alert! over " << alertLevel << "degrees, open hatch\n");
-    turnServo(90);
-    hatchOpen = true;
-  }
-  if (hatchOpen && ((tempSensorValue <= (alertLevel - 2) && humSensorValue <= (humLevel - 2)) || tempSensorValue <= 20)) {
-    INFO(logger, "Alert! less than " << alertLevel << "(" << tempSensorValue <<") degrees, close hatch\n");
-    turnServo(180);
-    hatchOpen = false;
-  }
+    if (!hatchOpen && (tempSensorValue >= alertLevel || (humSensorValue >= humLevel && tempSensorValue >= 20))) {
+        INFO(logger, "Alert! over " << alertLevel << "degrees, open hatch\n");
+        turnServo(90);
+        hatchOpen = true;
+    }
+    if (hatchOpen && ((tempSensorValue <= (alertLevel - 2) && humSensorValue <= (humLevel - 2)) || tempSensorValue <= 20)) {
+        INFO(logger, "Alert! less than " << alertLevel << "(" << tempSensorValue << ") degrees, close hatch\n");
+        turnServo(180);
+        hatchOpen = false;
+    }
 }
 
-void writeTempAndHumToLcd() {
-  char float_str[10] = {0};
-  lcd.setCursor(0, 0);
-  dtostrf(tempSensorValue, 4, 1, float_str);
-  lcd.print(float_str);
-  lcd.write(B11011111); // Degree symbol
-  lcd.print("C ");
-  memset(&float_str, 0, sizeof(float_str));
-  dtostrf(humSensorValue, 3, 1, float_str);
-  lcd.print("H=");
-  lcd.print(float_str);
-  lcd.print("\%");
-
-  if ((int)tempSensorValue > maxC ||
-      ((int)tempSensorValue < maxC && maxC == 125 && (int)tempSensorValue != 0 )) {
-    maxC = (int)tempSensorValue;
-  }
-  if ((int)tempSensorValue < minC && minC != -125 ||
-      ((int)tempSensorValue > minC && minC == -125 && (int)tempSensorValue != 0 )) {
-    minC = (int)tempSensorValue;
-  }
-  lcd.setCursor(0, 1);
-  lcd.print("Hi=");
-  lcd.print(maxC);
-  lcd.write(B11011111);
-  lcd.print("C Lo=");
-  lcd.print(minC);
-  lcd.write(B11011111);
-  lcd.print("C ");
-}
-
-void displaySetup() {
-  readConfigSensors();
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("T:");
-  lcd.print(tempLimitPotValue);
-  lcd.print("(");
-  lcd.print(alertLevel);
-  lcd.print(")          ");
-  lcd.setCursor(0, 1);
-  lcd.print("H:");
-  lcd.print(humLimitPotValue);
-  lcd.print("(");
-  lcd.print(humLevel);
-  lcd.print(")        ");
-
-}
-
-void stateSetup()
+void writeTempAndHumToLcd()
 {
-  displaySetup();
+    char float_str[10] = { 0 };
+    lcd.setCursor(0, 0);
+    dtostrf(tempSensorValue, 4, 1, float_str);
+    lcd.print(float_str);
+    lcd.write(B11011111); // Degree symbol
+    lcd.print("C ");
+    memset(&float_str, 0, sizeof(float_str));
+    dtostrf(humSensorValue, 3, 1, float_str);
+    lcd.print("H=");
+    lcd.print(float_str);
+    lcd.print("\%");
+
+    if ((int)tempSensorValue > maxC || ((int)tempSensorValue < maxC && maxC == 125 && (int)tempSensorValue != 0)) {
+        maxC = (int)tempSensorValue;
+    }
+    if ((int)tempSensorValue < minC && minC != -125 || ((int)tempSensorValue > minC && minC == -125 && (int)tempSensorValue != 0)) {
+        minC = (int)tempSensorValue;
+    }
+    lcd.setCursor(0, 1);
+    lcd.print("Hi=");
+    lcd.print(maxC);
+    lcd.write(B11011111);
+    lcd.print("C Lo=");
+    lcd.print(minC);
+    lcd.write(B11011111);
+    lcd.print("C ");
+}
+
+void displaySetup()
+{
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("T:");
+    lcd.print(tempLimitPotValue);
+    lcd.print("(");
+    lcd.print(alertLevel);
+    lcd.print(")          ");
+    lcd.setCursor(0, 1);
+    lcd.print("H:");
+    lcd.print(humLimitPotValue);
+    lcd.print("(");
+    lcd.print(humLevel);
+    lcd.print(")        ");
 }
