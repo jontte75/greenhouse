@@ -11,7 +11,7 @@ void Log::print(const char *fmt, ...)
     va_start(va, fmt);
     char buf[vsnprintf(NULL, 0, fmt, va) + 1];
     vsprintf(buf, fmt, va);
-    Serial.print(buf);
+    serial.print(buf);
     va_end(va);
 }
 
